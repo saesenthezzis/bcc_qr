@@ -1,4 +1,5 @@
 import { config } from 'dotenv';
+import express, { Express, Request, Response } from 'express';
 import { Logger } from './utils/Logger';
 import { RegistryAgent } from './agents/Registry';
 import { SurveillanceAgent } from './agents/Surveillance';
@@ -8,6 +9,12 @@ import { DispatcherAgent } from './agents/Dispatcher';
 config();
 
 Logger.info('CreditBridge RPA Engine starting...');
+
+// Определение режима работы (production/development)
+const isProduction = process.env.NODE_ENV === 'production';
+const isRender = process.env.RENDER === 'true' || !!process.env.PORT;
+
+Logger.info(`Environment: NODE_ENV=${process.env.NODE_ENV || 'development'}, isRender=${isRender}`);
 
 // Валидация переменных окружения
 const requiredEnvVars = ['BANK_URL', 'BANK_LOGIN', 'BANK_PASSWORD', 'SUPABASE_URL', 'SUPABASE_KEY', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_IDS'];
@@ -36,6 +43,32 @@ surveillance.on('smsRequired', async ({ screenshot, timestamp }) => {
 });
 
 const CHECK_INTERVAL_MS = (parseInt(process.env.CHECK_INTERVAL_MINUTES || '1') * 60 * 1000);
+
+/**
+ * Keep-Alive сервер для Render (анти-сон)
+ */
+async function startKeepAliveServer(): Promise<void> {
+  const app: Express = express();
+  const port = process.env.PORT || 3000;
+
+  app.get('/', (req: Request, res: Response) => {
+    res.status(200).json({
+      status: 'Bot is running',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      environment: process.env.NODE_ENV || 'development',
+    });
+  });
+
+  // Health check endpoint
+  app.get('/health', (req: Request, res: Response) => {
+    res.status(200).send('OK');
+  });
+
+  app.listen(port, () => {
+    Logger.info(`Keep-Alive server started on port ${port}`);
+  });
+}
 
 /**
  * Основной цикл обработки заказов
@@ -144,11 +177,22 @@ async function main(): Promise<void> {
     // Инициализация браузера один раз при старте
     await surveillance.initBrowser();
 
+    // Запуск Keep-Alive сервера для Render (анти-сон)
+    await startKeepAliveServer();
+
+    // Уведомление админа о успешном запуске
+    if (isRender) {
+      Logger.info('Running on Render cloud, sending startup notification...');
+      await dispatcher.sendStartupNotification();
+    }
+
+    Logger.info('🚀 CreditBridge RPA Engine is ready and running!');
+
     // Бесконечный цикл с одним браузером
     while (true) {
       try {
         await processOrders();
-        
+
         // Ожидание до следующего цикла
         await new Promise(resolve => setTimeout(resolve, CHECK_INTERVAL_MS));
       } catch (error) {

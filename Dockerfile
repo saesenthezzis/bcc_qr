@@ -34,9 +34,14 @@ RUN npx playwright install chromium
 # Устанавливаем переменную окружения для storage
 ENV STORAGE_DIR=/app/storage
 ENV NODE_ENV=production
+ENV PORT=3000
+ENV RENDER=true
 
 # Создаём директорию для storage
 RUN mkdir -p /app/storage
+
+# Открываем порт для Keep-Alive сервера
+EXPOSE 3000
 
 # Запускаем приложение
 CMD ["node", "dist/index.js"]

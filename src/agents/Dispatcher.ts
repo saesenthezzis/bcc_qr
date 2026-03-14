@@ -221,6 +221,25 @@ export class DispatcherAgent {
   }
 
   /**
+   * Уведомление о успешном запуске бота на сервере
+   */
+  async sendStartupNotification(): Promise<void> {
+    if (!this.adminChatId) {
+      Logger.warn('Dispatcher: ADMIN_ID not configured, startup notification skipped');
+      return;
+    }
+
+    const caption = `🚀 Бот успешно запущен на сервере Render и готов к работе!\n\n⏰ Время: ${new Date().toISOString()}\n🌐 Environment: ${process.env.NODE_ENV || 'production'}`;
+
+    try {
+      await this.bot.telegram.sendMessage(this.adminChatId, caption);
+      Logger.info(`Dispatcher: Startup notification sent to admin ${this.adminChatId}`);
+    } catch (sendError) {
+      await this.handleTelegramError(sendError, 'sendStartupNotification');
+    }
+  }
+
+  /**
    * Остановка бота
    */
   async stop(): Promise<void> {

@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  creditbridge-rpa:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: creditbridge-rpa
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./storage:/app/storage
+    environment:
+      - NODE_ENV=production

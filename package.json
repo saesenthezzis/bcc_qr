@@ -1,0 +1,36 @@
+{
+  "name": "bcc_qr",
+  "version": "1.0.0",
+  "description": "CreditBridge RPA Engine - Bank QR Automation",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc && node dist/index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "rpa",
+    "crawlee",
+    "playwright",
+    "telegram",
+    "supabase"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.99.1",
+    "crawlee": "^3.16.0",
+    "dotenv": "^17.3.1",
+    "node-cron": "^4.2.1",
+    "playwright": "^1.58.2",
+    "qrcode": "^1.5.4",
+    "telegraf": "^4.16.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "@types/qrcode": "^1.5.6",
+    "typescript": "^5.9.3"
+  }
+}

@@ -104,12 +104,17 @@ export class SurveillanceAgent extends EventEmitter {
 
     this.browser = await chromium.launch({
       headless: true, // Headless режим для стабильности
+      // Флаги для экономии памяти (важно для Render с 512MB лимитом)
       args: [
+        '--disable-dev-shm-usage', // Испольвать /tmp вместо /dev/shm
+        '--no-sandbox', // Без песочницы (требуется в Docker)
+        '--disable-gpu', // Отключаем GPU для экономии памяти
+        '--disable-accelerated-2d-canvas',
+        '--disable-webgl',
         '--ignore-certificate-errors',
         '--allow-running-insecure-content',
         '--disable-features=CertificateTransparency',
         '--auto-select-desktop-certificate-origin="online.bcc.kz"',
-        '--start-maximized', // На весь экран
       ],
     });
 

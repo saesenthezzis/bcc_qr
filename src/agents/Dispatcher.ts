@@ -203,20 +203,22 @@ export class DispatcherAgent {
 
   /**
    * Отправка уведомления о необходимости подтверждения заявки (PENDING)
+   * Отправляется во ВСЕ чаты из TELEGRAM_CHAT_IDS (включая группу)
    */
   async sendConfirmationAlert(externalId: string, amount: number): Promise<void> {
-    if (!this.adminChatId) {
-      Logger.warn('Dispatcher: ADMIN_ID not configured, confirmation alert skipped');
-      return;
-    }
+    const caption = `⚠️ ТРЕБУЕТСЯ ПОДТВЕРЖДЕНИЕ\n\nИИН: ${externalId}\nСумма: ${amount.toFixed(2)} тг\n\n---\nНужно подтвердить заявку в личном кабинете: https://online.bcc.kz/cashier-cabinet/ru\nПосле вашего подтверждения бот автоматически пришлет QR-код в этот чат.\n\n📖 Актуальная инструкция — в закрепленном сообщении.\n\n🔔 НАПОМИНАНИЕ: все неподтвержденные заявки автоматически аннулируются.`;
 
-    const caption = `⚠️ ТРЕБУЕТСЯ ПОДТВЕРЖДЕНИЕ\n\nИИН: ${externalId}\nСумма: ${amount.toFixed(2)} тг\n\n---\nНужно подтвердить заявку в личном кабинете: https://online.bcc.kz/cashier-cabinet/ru\nАктуальная инструкция в закрепленном сообщении.\n\n🔔 НАПОМИНАНИЕ: все неподтвержденные заявки автоматически аннулируются.`;
-
-    try {
-      await this.bot.telegram.sendMessage(this.adminChatId, caption);
-      Logger.info(`Dispatcher: Confirmation alert sent to admin ${this.adminChatId} for order ${externalId}`);
-    } catch (sendError) {
-      await this.handleTelegramError(sendError, `sendConfirmationAlert to ${this.adminChatId}`);
+    // Отправка во все чаты (включая группу)
+    for (const { chatId, threadId } of this.allowedChats) {
+      try {
+        await this.bot.telegram.sendMessage(chatId, caption, {
+          message_thread_id: threadId,
+        });
+        const threadInfo = threadId ? ` (thread ${threadId})` : '';
+        Logger.info(`Dispatcher: Confirmation alert sent to chat_id ${chatId}${threadInfo} for order ${externalId}`);
+      } catch (sendError) {
+        await this.handleTelegramError(sendError, `sendConfirmationAlert to ${chatId}`);
+      }
     }
   }
 

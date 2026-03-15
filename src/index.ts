@@ -46,11 +46,14 @@ const CHECK_INTERVAL_MS = (parseInt(process.env.CHECK_INTERVAL_MINUTES || '1') *
 
 /**
  * Keep-Alive сервер для Render (анти-сон)
+ * ВАЖНО: Слушаем 0.0.0.0 для работы в Docker-контейнере
  */
 async function startKeepAliveServer(): Promise<void> {
   const app: Express = express();
-  const port = process.env.PORT || 3000;
+  const port = parseInt(process.env.PORT || '3000', 10);
+  const host = '0.0.0.0';
 
+  // Эндпоинты для мгновенного ответа
   app.get('/', (req: Request, res: Response) => {
     res.status(200).json({
       status: 'Bot is running',
@@ -60,13 +63,13 @@ async function startKeepAliveServer(): Promise<void> {
     });
   });
 
-  // Health check endpoint
+  // Health check endpoint (минимальный ответ)
   app.get('/health', (req: Request, res: Response) => {
     res.status(200).send('OK');
   });
 
-  app.listen(port, () => {
-    Logger.info(`Keep-Alive server started on port ${port}`);
+  app.listen(port, host, () => {
+    Logger.info(`Keep-Alive server listening on ${host}:${port}`);
   });
 }
 
@@ -169,16 +172,18 @@ async function processOrders(): Promise<void> {
 
 /**
  * Запуск планировщика с единым циклом while(true)
+ * ВАЖНО: Keep-Alive сервер запускается ПЕРВЫМ для мгновенного ответа на Health Check
  */
 async function main(): Promise<void> {
+  // === Server First: Запускаем Express-сервер ДО инициализации браузера ===
+  await startKeepAliveServer();
+  Logger.info(`🏥 Health check server is live on port ${process.env.PORT || 3000}`);
+
   Logger.info(`Starting scheduler with ${CHECK_INTERVAL_MS / 1000}s interval`);
 
   try {
     // Инициализация браузера один раз при старте
     await surveillance.initBrowser();
-
-    // Запуск Keep-Alive сервера для Render (анти-сон)
-    await startKeepAliveServer();
 
     // Уведомление админа о успешном запуске
     if (isRender) {

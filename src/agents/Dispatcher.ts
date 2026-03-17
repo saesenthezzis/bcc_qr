@@ -61,20 +61,20 @@ export class DispatcherAgent {
   private setupBot(): void {
     this.bot.start((ctx) => {
       if (this.isAuthorized(ctx.chat.id)) {
-        ctx.reply('Авторизовано. Система CreditBridge активна.');
+        ctx.reply('✅ Авторизовано. Система CreditBridge активна.');
       } else {
-        ctx.reply('Доступ запрещён.');
+        ctx.reply('❌ Доступ запрещён.');
         Logger.warn(`Unauthorized access attempt from chat_id: ${ctx.chat.id}`);
       }
     });
 
     this.bot.command('status', (ctx) => {
       if (!this.isAuthorized(ctx.chat.id)) {
-        ctx.reply('Доступ запрещён.');
+        ctx.reply('❌ Доступ запрещён.');
         return;
       }
 
-      ctx.reply(`Статус системы:\nВремя: ${new Date().toISOString()}\nСтатус: Активен`);
+      ctx.reply(`📊 Статус системы:\nВремя: ${new Date().toISOString()}\nСтатус: Активен`);
     });
 
     this.bot.on('text', async (ctx) => {
@@ -86,11 +86,11 @@ export class DispatcherAgent {
           if (this.surveillanceAgent) {
             this.surveillanceAgent.submitSmsCode(text);
             this.isWaitingForSms = false;
-            await ctx.reply('СМС-код принят и введён в систему.');
+            await ctx.reply('✅ СМС-код принят и введён в систему.');
             Logger.info(`Dispatcher: SMS code received from admin ${chatId}`);
           }
         } else {
-          await ctx.reply('Неверный формат СМС-кода. Отправьте только цифры (4-8 знаков).');
+          await ctx.reply('❌ Неверный формат СМС-кода. Отправьте только цифры (4-8 знаков).');
         }
         return;
       }
@@ -104,7 +104,7 @@ export class DispatcherAgent {
   }
 
   async sendQRCode(photoBuffer: Buffer, orderId: string, amount: number): Promise<void> {
-    const caption = `ИИН #${orderId}\nСумма: ${amount.toFixed(2)} KZT\n${new Date().toISOString()}`;
+    const caption = `🧾 ИИН #${orderId}\nСумма: ${amount.toFixed(2)} KZT\n${new Date().toISOString()}`;
 
     for (const { chatId, threadId } of this.allowedChats) {
       try {
@@ -132,7 +132,7 @@ export class DispatcherAgent {
 
     const errorMessage = error instanceof Error ? error.message : String(error);
     const timestamp = new Date().toISOString();
-    const caption = `Ошибка в цикле мониторинга\n\nВремя: ${timestamp}\nОписание: ${errorMessage}`;
+    const caption = `🚨 Ошибка в цикле мониторинга\n\n⏰ Время: ${timestamp}\n❗ Описание: ${errorMessage}`;
 
     try {
       await this.bot.telegram.sendMessage(this.adminChatId, caption);
@@ -153,7 +153,7 @@ export class DispatcherAgent {
         source: screenshot,
         filename: 'sms_verification.png',
       }, {
-        caption: `Требуется СМС-код для входа\n\nВремя: ${timestamp}\n\nОтправьте СМС-код в ответ (только цифры).`,
+        caption: `🔐 Требуется СМС-код для входа\n\n⏰ Время: ${timestamp}\n\n📝 Отправьте СМС-код в ответ (только цифры).`,
       });
 
       this.isWaitingForSms = true;
@@ -185,7 +185,7 @@ export class DispatcherAgent {
       return;
     }
 
-    const caption = `Бот успешно запущен на сервере Render и готов к работе!\n\nВремя: ${new Date().toISOString()}\nEnvironment: ${process.env.NODE_ENV || 'production'}`;
+    const caption = `🚀 Бот успешно запущен на сервере Render и готов к работе!\n\n⏰ Время: ${new Date().toISOString()}\n🌐 Environment: ${process.env.NODE_ENV || 'production'}`;
 
     try {
       await this.bot.telegram.sendMessage(this.adminChatId, caption);

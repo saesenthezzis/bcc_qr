@@ -4,6 +4,7 @@ import { OrderStatus, Order } from '../types';
 
 export class RegistryAgent {
   private client: SupabaseClient;
+  private readonly SESSION_ID = 'bcc_bank_session';
 
   constructor(supabaseUrl: string, supabaseKey: string) {
     this.client = createClient(supabaseUrl, supabaseKey);
@@ -110,5 +111,76 @@ export class RegistryAgent {
     }
 
     return { shouldProcess: false, reason: 'ALREADY_PROCESSED', currentStatus: existingStatus };
+  }
+
+  async saveSessionToDb(sessionData: any): Promise<boolean> {
+    try {
+      const { error } = await this.client
+        .from('bot_sessions')
+        .upsert({
+          id: this.SESSION_ID,
+          data: sessionData,
+          updated_at: new Date().toISOString(),
+        }, {
+          onConflict: 'id',
+        });
+
+      if (error) {
+        Logger.error(`Registry saveSession error: ${error.message}`);
+        return false;
+      }
+
+      Logger.info('Session saved to Supabase');
+      return true;
+    } catch (error) {
+      Logger.error(`Failed to save session: ${error}`);
+      return false;
+    }
+  }
+
+  async loadSessionFromDb(): Promise<any | null> {
+    try {
+      const { data, error } = await this.client
+        .from('bot_sessions')
+        .select('data')
+        .eq('id', this.SESSION_ID)
+        .single();
+
+      if (error && error.code !== 'PGRST116') {
+        Logger.error(`Registry loadSession error: ${error.message}`);
+        return null;
+      }
+
+      if (data) {
+        Logger.info('Session loaded from Supabase');
+        return data.data;
+      }
+
+      Logger.info('No session found in Supabase');
+      return null;
+    } catch (error) {
+      Logger.error(`Failed to load session: ${error}`);
+      return null;
+    }
+  }
+
+  async deleteSessionFromDb(): Promise<boolean> {
+    try {
+      const { error } = await this.client
+        .from('bot_sessions')
+        .delete()
+        .eq('id', this.SESSION_ID);
+
+      if (error) {
+        Logger.error(`Registry deleteSession error: ${error.message}`);
+        return false;
+      }
+
+      Logger.info('Session deleted from Supabase');
+      return true;
+    } catch (error) {
+      Logger.error(`Failed to delete session: ${error}`);
+      return false;
+    }
   }
 }

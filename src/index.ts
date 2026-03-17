@@ -24,7 +24,12 @@ for (const envVar of requiredEnvVars) {
 }
 
 const registry = new RegistryAgent(process.env.SUPABASE_URL!, process.env.SUPABASE_KEY!);
-const surveillance = new SurveillanceAgent(process.env.BANK_URL!, process.env.BANK_LOGIN!, process.env.BANK_PASSWORD!);
+const surveillance = new SurveillanceAgent(
+  process.env.BANK_URL!,
+  process.env.BANK_LOGIN!,
+  process.env.BANK_PASSWORD!,
+  registry
+);
 const generator = new GeneratorAgent();
 const dispatcher = new DispatcherAgent(
   process.env.TELEGRAM_BOT_TOKEN!,

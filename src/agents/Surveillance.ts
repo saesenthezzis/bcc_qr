@@ -5,6 +5,7 @@ import { Logger } from '../utils/Logger';
 import { sanitizeAmount } from '../utils/Sanitizer';
 import { Order, OrderStatus } from '../types';
 import { EventEmitter } from 'events';
+import { RegistryAgent } from './Registry';
 
 export class SurveillanceAgent extends EventEmitter {
   private bankUrl: string;
@@ -16,21 +17,29 @@ export class SurveillanceAgent extends EventEmitter {
   private page: Page | null = null;
   private lastHardRefresh: number = 0;
   private readonly HARD_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
+  private readonly SESSION_SYNC_INTERVAL_MS = 30 * 60 * 1000;
   private isBrowserInitialized: boolean = false;
   private isWaitingForSms: boolean = false;
   private smsCodePromise: Promise<string> | null = null;
   private resolveSmsCode: ((code: string) => void) | null = null;
+  private registry: RegistryAgent | null = null;
+  private lastSessionSync: number = 0;
 
-  constructor(bankUrl: string, bankLogin: string, bankPassword: string) {
+  constructor(bankUrl: string, bankLogin: string, bankPassword: string, registry?: RegistryAgent) {
     super();
     this.bankUrl = bankUrl;
     this.bankLogin = bankLogin;
     this.bankPassword = bankPassword;
     this.storagePath = path.join(process.cwd(), 'storage');
+    this.registry = registry || null;
 
     if (!fs.existsSync(this.storagePath)) {
       fs.mkdirSync(this.storagePath, { recursive: true });
     }
+  }
+
+  public setRegistry(registry: RegistryAgent): void {
+    this.registry = registry;
   }
 
   private async ensureCorrectUrl(): Promise<void> {
@@ -78,14 +87,22 @@ export class SurveillanceAgent extends EventEmitter {
     Logger.info('Surveillance: Initializing browser...');
 
     const sessionPath = path.join(this.storagePath, 'session.json');
-
     let storageState: { cookies: any[], origins: any[] } | undefined = undefined;
-    if (fs.existsSync(sessionPath)) {
+
+    if (this.registry) {
+      const cloudSession = await this.registry.loadSessionFromDb();
+      if (cloudSession) {
+        storageState = cloudSession;
+        Logger.info('Surveillance: Loaded session from Supabase');
+      }
+    }
+
+    if (!storageState && fs.existsSync(sessionPath)) {
       try {
         storageState = JSON.parse(fs.readFileSync(sessionPath, 'utf-8'));
-        Logger.info('Surveillance: Loaded existing session');
+        Logger.info('Surveillance: Loaded existing local session');
       } catch (error) {
-        Logger.warn('Surveillance: Failed to load session, will login fresh');
+        Logger.warn('Surveillance: Failed to load local session');
       }
     }
 
@@ -435,9 +452,42 @@ export class SurveillanceAgent extends EventEmitter {
   }
 
   private async saveSession(sessionPath: string): Promise<void> {
-    if (this.context) {
+    if (!this.context) return;
+
+    try {
       const state = await this.context.storageState();
-      fs.writeFileSync(sessionPath, JSON.stringify(state, null, 2));
+      const stateJson = JSON.stringify(state, null, 2);
+
+      fs.writeFileSync(sessionPath, stateJson);
+      Logger.info('Session saved to local file');
+
+      if (this.registry) {
+        const now = Date.now();
+        if (now - this.lastSessionSync >= this.SESSION_SYNC_INTERVAL_MS) {
+          await this.registry.saveSessionToDb(state);
+          this.lastSessionSync = now;
+          Logger.info('Session synced to Supabase');
+        }
+      }
+    } catch (error) {
+      Logger.error(`Failed to save session: ${error}`);
+    }
+  }
+
+  async syncSessionToCloud(): Promise<boolean> {
+    if (!this.context || !this.registry) return false;
+
+    try {
+      const state = await this.context.storageState();
+      const success = await this.registry.saveSessionToDb(state);
+      if (success) {
+        this.lastSessionSync = Date.now();
+        Logger.info('Session manually synced to Supabase');
+      }
+      return success;
+    } catch (error) {
+      Logger.error(`Failed to sync session: ${error}`);
+      return false;
     }
   }
 

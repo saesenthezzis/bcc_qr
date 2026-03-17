@@ -9,10 +9,6 @@ export class RegistryAgent {
     this.client = createClient(supabaseUrl, supabaseKey);
   }
 
-  /**
-   * Проверяет, существует ли заказ с данным external_id
-   * @returns true если заказ НОВЫЙ (не существует в БД)
-   */
   async check(externalId: string): Promise<boolean> {
     try {
       const { data, error } = await this.client
@@ -26,7 +22,6 @@ export class RegistryAgent {
         throw error;
       }
 
-      // PGRST116 = no rows found, значит заказ новый
       return !data;
     } catch (error) {
       Logger.error(`Failed to check order ${externalId}: ${error}`);
@@ -34,10 +29,6 @@ export class RegistryAgent {
     }
   }
 
-  /**
-   * Проверяет статус заказа в БД
-   * @returns статус заказа или null если заказ не найден
-   */
   async getOrderStatus(externalId: string): Promise<OrderStatus | null> {
     try {
       const { data, error } = await this.client
@@ -58,9 +49,6 @@ export class RegistryAgent {
     }
   }
 
-  /**
-   * Обновляет статус заказа в БД (например, с PENDING на READY_FOR_QR)
-   */
   async updateOrderStatus(externalId: string, newStatus: OrderStatus): Promise<void> {
     try {
       const { error } = await this.client
@@ -80,9 +68,6 @@ export class RegistryAgent {
     }
   }
 
-  /**
-   * Регистрирует заказ в БД с указанным статусом
-   */
   async register(externalId: string, amount: number, status: OrderStatus): Promise<void> {
     try {
       const { error } = await this.client
@@ -105,10 +90,6 @@ export class RegistryAgent {
     }
   }
 
-  /**
-   * Проверяет, нужно ли обрабатывать заказ
-   * @returns объект с информацией о том, как обрабатывать заказ
-   */
   async shouldProcessOrder(order: Order): Promise<{
     shouldProcess: boolean;
     reason: 'NEW' | 'STATUS_CHANGED' | 'ALREADY_PROCESSED';
@@ -117,21 +98,17 @@ export class RegistryAgent {
     const existingStatus = await this.getOrderStatus(order.external_id);
 
     if (existingStatus === null) {
-      // Заказ новый
       return { shouldProcess: true, reason: 'NEW' };
     }
 
-    // Если статус изменился с PENDING на READY_FOR_QR
     if (existingStatus === 'PENDING' && order.status === 'READY_FOR_QR') {
       return { shouldProcess: true, reason: 'STATUS_CHANGED', currentStatus: existingStatus };
     }
 
-    // Если статус не изменился или уже READY_FOR_QR
     if (existingStatus === order.status) {
       return { shouldProcess: false, reason: 'ALREADY_PROCESSED', currentStatus: existingStatus };
     }
 
-    // Другие случаи (например, READY_FOR_QR → PENDING) — не обрабатываем
     return { shouldProcess: false, reason: 'ALREADY_PROCESSED', currentStatus: existingStatus };
   }
 }

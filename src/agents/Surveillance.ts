@@ -149,35 +149,96 @@ export class SurveillanceAgent extends EventEmitter {
 
       await this.ensureCorrectUrl();
 
-      const alreadyLoggedIn = await this.checkSessionValid();
-      if (alreadyLoggedIn) {
+      await this.page!.waitForTimeout(1000);
+      await this.page!.waitForLoadState('networkidle');
+
+      const pageState = await this.detectPageState();
+
+      if (pageState === 'LOGGED_IN') {
         Logger.info('Surveillance: Already logged in (session restored)');
         await this.saveSession(sessionPath);
         return;
       }
 
-      await this.fillPhoneField('input#username', this.bankLogin);
-
-      await this.page!.fill('input#password', this.bankPassword);
-      await this.page!.click('button[type="submit"]');
-
-      const smsCodeSent = await this.handleSmsVerification(sessionPath);
-      if (!smsCodeSent) {
-        await this.page!.waitForSelector('.bcc-table-body', { timeout: 30000 });
+      if (pageState === 'LOGIN_FORM') {
+        Logger.info('Surveillance: Login form detected, entering credentials');
+        await this.performLogin(sessionPath);
+        return;
       }
 
-      await this.saveSession(sessionPath);
+      if (pageState === 'UNKNOWN') {
+        const currentUrl = this.page!.url();
+        Logger.warn(`Surveillance: Unknown page state. URL: ${currentUrl}`);
+        
+        const tableVisible = await this.page!.isVisible('.bcc-table-body').catch(() => false);
+        if (tableVisible) {
+          Logger.info('Surveillance: Table found, considering as logged in');
+          await this.saveSession(sessionPath);
+          return;
+        }
+        
+        Logger.error('Surveillance: Cannot determine page state, table not found');
+        throw new Error(`Unknown page state at URL: ${currentUrl}`);
+      }
 
-      Logger.info('Surveillance: Login successful, session saved');
     } catch (error) {
       const errorMessage = String(error);
       if (this.isWaitingForSms && (errorMessage.includes('Timeout') || errorMessage.includes('timeout'))) {
         Logger.warn('Surveillance: Timeout while waiting, but SMS verification is in progress');
         throw error;
       }
+      
+      const isSessionValid = await this.checkSessionValid().catch(() => false);
+      if (isSessionValid) {
+        Logger.warn('Surveillance: Error occurred but session appears valid, continuing');
+        return;
+      }
+      
       Logger.error(`Surveillance: Login failed - ${error}`);
       throw error;
     }
+  }
+
+  private async detectPageState(): Promise<'LOGGED_IN' | 'LOGIN_FORM' | 'UNKNOWN'> {
+    try {
+      const [hasTable, hasLoginField] = await Promise.all([
+        this.page!.isVisible('.bcc-table-body').catch(() => false),
+        this.page!.isVisible('input#username').catch(() => false),
+      ]);
+
+      if (hasTable && !hasLoginField) {
+        return 'LOGGED_IN';
+      }
+
+      if (hasLoginField && !hasTable) {
+        return 'LOGIN_FORM';
+      }
+
+      if (hasTable && hasLoginField) {
+        Logger.warn('Surveillance: Both table and login field visible, prioritizing table');
+        return 'LOGGED_IN';
+      }
+
+      return 'UNKNOWN';
+    } catch (error) {
+      Logger.error(`Surveillance: Page state detection failed - ${error}`);
+      return 'UNKNOWN';
+    }
+  }
+
+  private async performLogin(sessionPath: string): Promise<void> {
+    await this.fillPhoneField('input#username', this.bankLogin);
+
+    await this.page!.fill('input#password', this.bankPassword);
+    await this.page!.click('button[type="submit"]');
+
+    const smsCodeSent = await this.handleSmsVerification(sessionPath);
+    if (!smsCodeSent) {
+      await this.page!.waitForSelector('.bcc-table-body', { timeout: 30000 });
+    }
+
+    await this.saveSession(sessionPath);
+    Logger.info('Surveillance: Login successful, session saved');
   }
 
   private async handleSmsVerification(sessionPath: string): Promise<boolean> {

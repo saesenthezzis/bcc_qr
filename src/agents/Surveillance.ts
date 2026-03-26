@@ -17,13 +17,11 @@ export class SurveillanceAgent extends EventEmitter {
   private page: Page | null = null;
   private lastHardRefresh: number = 0;
   private readonly HARD_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
-  private readonly SESSION_SYNC_INTERVAL_MS = 30 * 60 * 1000;
   private isBrowserInitialized: boolean = false;
   private isWaitingForSms: boolean = false;
   private smsCodePromise: Promise<string> | null = null;
   private resolveSmsCode: ((code: string) => void) | null = null;
   private registry: RegistryAgent | null = null;
-  private lastSessionSync: number = 0;
 
   constructor(bankUrl: string, bankLogin: string, bankPassword: string, registry?: RegistryAgent) {
     super();
@@ -155,7 +153,14 @@ export class SurveillanceAgent extends EventEmitter {
     const sessionPath = path.join(this.storagePath, 'session.json');
 
     try {
-      await this.page!.goto('https://online.bcc.kz/cashier-cabinet/ru', { waitUntil: 'networkidle', timeout: 60000 });
+      // Patience Mode: ждем полную загрузку страницы
+      await this.page!.goto('https://online.bcc.kz/cashier-cabinet/ru', { 
+        waitUntil: 'domcontentloaded',
+        timeout: 60000 
+      });
+      
+      // Дополнительное ожидание networkidle после domcontentloaded
+      await this.page!.waitForLoadState('networkidle', { timeout: 60000 });
 
       await this.page!.waitForTimeout(500);
       for (let i = 0; i < 3; i++) {
@@ -166,8 +171,10 @@ export class SurveillanceAgent extends EventEmitter {
 
       await this.ensureCorrectUrl();
 
-      await this.page!.waitForTimeout(1000);
+      // Даем время на загрузку "тяжелого" банка
+      await this.page!.waitForTimeout(2000);
       await this.page!.waitForLoadState('networkidle');
+      await this.page!.waitForTimeout(3000);
 
       const pageState = await this.detectPageState();
 
@@ -183,48 +190,102 @@ export class SurveillanceAgent extends EventEmitter {
         return;
       }
 
+      if (pageState === 'SKELETON') {
+        Logger.info('Surveillance: Skeleton state detected, waiting for data...');
+        // Ждем появления данных в таблице до 60 секунд
+        try {
+          await this.page!.waitForSelector('.bcc-table-body__row', { timeout: 60000, state: 'visible' });
+          Logger.info('Surveillance: Data loaded after skeleton wait');
+          await this.saveSession(sessionPath);
+          return;
+        } catch (timeoutError) {
+          Logger.warn('Surveillance: Data did not appear after skeleton wait, reloading');
+        }
+      }
+
       if (pageState === 'UNKNOWN') {
         const currentUrl = this.page!.url();
         Logger.warn(`Surveillance: Unknown page state. URL: ${currentUrl}`);
-        
-        const tableVisible = await this.page!.isVisible('.bcc-table-body').catch(() => false);
-        if (tableVisible) {
-          Logger.info('Surveillance: Table found, considering as logged in');
-          await this.saveSession(sessionPath);
-          return;
+
+        // Patience Mode: 3 попытки с reload и ожиданием 60s
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          Logger.info(`Surveillance: Reload attempt ${attempt}/3 with 60s patience`);
+          
+          // Полная перезагрузка страницы
+          await this.page!.reload({ 
+            waitUntil: 'domcontentloaded',
+            timeout: 60000 
+          });
+          await this.page!.waitForLoadState('networkidle', { timeout: 60000 });
+          await this.page!.waitForTimeout(10000); // Даем время на загрузку данных
+
+          const retryState = await this.detectPageState();
+          
+          if (retryState === 'LOGGED_IN') {
+            Logger.info('Surveillance: Table found after reload, considering as logged in');
+            await this.saveSession(sessionPath);
+            return;
+          }
+          
+          if (retryState === 'LOGIN_FORM') {
+            Logger.info('Surveillance: Login form found after reload');
+            await this.performLogin(sessionPath);
+            return;
+          }
+          
+          if (retryState === 'SKELETON') {
+            Logger.info(`Surveillance: Still skeleton on attempt ${attempt}, waiting more...`);
+            try {
+              await this.page!.waitForSelector('.bcc-table-body__row', { timeout: 60000, state: 'visible' });
+              Logger.info('Surveillance: Data loaded after skeleton wait');
+              await this.saveSession(sessionPath);
+              return;
+            } catch (timeoutError) {
+              Logger.warn(`Surveillance: Skeleton timeout on attempt ${attempt}`);
+            }
+          }
         }
-        
-        Logger.error('Surveillance: Cannot determine page state, table not found');
-        throw new Error(`Unknown page state at URL: ${currentUrl}`);
+
+        Logger.error('Surveillance: Cannot determine page state after 3 reload attempts');
+        throw new Error(`Unknown page state at URL: ${currentUrl} after 3 reload attempts with 60s patience`);
       }
 
     } catch (error) {
-      const errorMessage = String(error);
-      if (this.isWaitingForSms && (errorMessage.includes('Timeout') || errorMessage.includes('timeout'))) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      if (this.isWaitingForSms && (errorMsg.includes('Timeout') || errorMsg.includes('timeout'))) {
         Logger.warn('Surveillance: Timeout while waiting, but SMS verification is in progress');
         throw error;
       }
-      
+
       const isSessionValid = await this.checkSessionValid().catch(() => false);
       if (isSessionValid) {
         Logger.warn('Surveillance: Error occurred but session appears valid, continuing');
         return;
       }
-      
-      Logger.error(`Surveillance: Login failed - ${error}`);
+
+      Logger.error(`Surveillance: Login failed - ${errorMsg}`);
       throw error;
     }
   }
 
-  private async detectPageState(): Promise<'LOGGED_IN' | 'LOGIN_FORM' | 'UNKNOWN'> {
+  private async detectPageState(): Promise<'LOGGED_IN' | 'LOGIN_FORM' | 'SKELETON' | 'UNKNOWN'> {
     try {
+      // Smart State Detection: сначала ждем появления таблицы или логина
       const [hasTable, hasLoginField] = await Promise.all([
         this.page!.isVisible('.bcc-table-body').catch(() => false),
         this.page!.isVisible('input#username').catch(() => false),
       ]);
 
       if (hasTable && !hasLoginField) {
-        return 'LOGGED_IN';
+        // Проверяем, есть ли данные в таблице (не "скелетон" ли)
+        const hasRows = await this.page!.isVisible('.bcc-table-body__row').catch(() => false);
+        if (hasRows) {
+          return 'LOGGED_IN';
+        } else {
+          // Таблица есть, но данных нет — это "скелетон"
+          Logger.debug('Surveillance: Table visible but no rows (skeleton detected)');
+          return 'SKELETON';
+        }
       }
 
       if (hasLoginField && !hasTable) {
@@ -234,6 +295,14 @@ export class SurveillanceAgent extends EventEmitter {
       if (hasTable && hasLoginField) {
         Logger.warn('Surveillance: Both table and login field visible, prioritizing table');
         return 'LOGGED_IN';
+      }
+
+      // Проверяем явный "скелетон" — серые блоки загрузки
+      const hasSkeleton = await this.page!.isVisible('[class*="skeleton"]').catch(() => false) ||
+                          await this.page!.isVisible('[class*="loading"]').catch(() => false);
+      if (hasSkeleton) {
+        Logger.debug('Surveillance: Skeleton/loading state detected');
+        return 'SKELETON';
       }
 
       return 'UNKNOWN';
@@ -251,7 +320,8 @@ export class SurveillanceAgent extends EventEmitter {
 
     const smsCodeSent = await this.handleSmsVerification(sessionPath);
     if (!smsCodeSent) {
-      await this.page!.waitForSelector('.bcc-table-body', { timeout: 30000 });
+      // Patience Mode: ждем таблицу до 60 секунд
+      await this.page!.waitForSelector('.bcc-table-body', { timeout: 60000 });
     }
 
     await this.saveSession(sessionPath);
@@ -341,7 +411,7 @@ export class SurveillanceAgent extends EventEmitter {
     await this.page!.waitForTimeout(1000);
 
     try {
-      await this.page!.waitForSelector('input.bcc-input-code__input', { state: 'visible', timeout: 5000 });
+      await this.page!.waitForSelector('input.bcc-input-code__input', { state: 'visible', timeout: 60000 });
     } catch (e) {
       Logger.warn('Surveillance: SMS input not fully visible, proceeding anyway');
     }
@@ -411,17 +481,18 @@ export class SurveillanceAgent extends EventEmitter {
       Logger.info('Surveillance: SMS code submitted');
 
       try {
-        await this.page!.waitForSelector('.bcc-modal', { state: 'hidden', timeout: 10000 });
+        await this.page!.waitForSelector('.bcc-modal', { state: 'hidden', timeout: 60000 });
         Logger.info('Surveillance: SMS modal closed');
       } catch (modalError) {
         Logger.debug('Surveillance: SMS modal not found or already hidden');
       }
 
-      await this.page!.waitForSelector('.bcc-table-body', { timeout: 30000 });
+      await this.page!.waitForSelector('.bcc-table-body', { timeout: 60000, state: 'visible' });
       Logger.info('Surveillance: Table loaded after SMS verification');
 
     } catch (error) {
-      Logger.error(`Surveillance: Error during SMS code submission - ${error}`);
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      Logger.error(`Surveillance: Error during SMS code submission - ${errorMsg}`);
       throw error;
     } finally {
       this.isWaitingForSms = false;
@@ -462,12 +533,8 @@ export class SurveillanceAgent extends EventEmitter {
       Logger.info('Session saved to local file');
 
       if (this.registry) {
-        const now = Date.now();
-        if (now - this.lastSessionSync >= this.SESSION_SYNC_INTERVAL_MS) {
-          await this.registry.saveSessionToDb(state);
-          this.lastSessionSync = now;
-          Logger.info('Session synced to Supabase');
-        }
+        await this.registry.saveSessionToDb(state);
+        Logger.info('Session synced to Supabase');
       }
     } catch (error) {
       Logger.error(`Failed to save session: ${error}`);
@@ -481,7 +548,6 @@ export class SurveillanceAgent extends EventEmitter {
       const state = await this.context.storageState();
       const success = await this.registry.saveSessionToDb(state);
       if (success) {
-        this.lastSessionSync = Date.now();
         Logger.info('Session manually synced to Supabase');
       }
       return success;
@@ -507,7 +573,7 @@ export class SurveillanceAgent extends EventEmitter {
 
     try {
       await this.page.reload({ waitUntil: 'networkidle' });
-      await this.page.waitForSelector('.bcc-table-body', { timeout: 10000 });
+      await this.page.waitForSelector('.bcc-table-body', { timeout: 60000 });
       Logger.info('Surveillance: Hard refresh completed');
     } catch (error) {
       Logger.error(`Surveillance: Hard refresh failed - ${error}`);
@@ -529,7 +595,7 @@ export class SurveillanceAgent extends EventEmitter {
         Logger.warn('Surveillance: Soft refresh button not found');
       }
 
-      await this.page.waitForSelector('.bcc-table-body', { timeout: 10000 });
+      await this.page.waitForSelector('.bcc-table-body', { timeout: 60000 });
       await this.page.waitForTimeout(2000);
 
       Logger.info('Surveillance: Soft refresh completed');
@@ -548,7 +614,7 @@ export class SurveillanceAgent extends EventEmitter {
     const orders: Order[] = [];
 
     try {
-      await this.page.waitForSelector('.bcc-table-body__row', { timeout: 10000 });
+      await this.page.waitForSelector('.bcc-table-body__row', { timeout: 60000 });
 
       const rows = await this.page.$$('.bcc-table-body__row');
       Logger.info(`Surveillance: Found ${rows.length} rows in table`);

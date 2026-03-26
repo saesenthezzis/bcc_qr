@@ -46,6 +46,29 @@ surveillance.on('smsRequired', async ({ screenshot, timestamp }) => {
 const CHECK_INTERVAL_MS = (parseInt(process.env.CHECK_INTERVAL_MINUTES || '1') * 60 * 1000);
 const GRACEFUL_RESTART_HOURS = 3;
 
+async function retryRegistryOperation<T>(
+  operation: () => Promise<T>,
+  maxRetries = 3,
+  delayMs = 2000
+): Promise<T> {
+  let lastError: unknown;
+
+  for (let i = 1; i <= maxRetries; i++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (i === maxRetries) {
+        throw error;
+      }
+      Logger.warn(`DB operation failed, retry ${i}/${maxRetries}...`);
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('Unknown registry operation error');
+}
+
 async function startKeepAliveServer(): Promise<void> {
   const app: Express = express();
   const port = parseInt(process.env.PORT || '3000', 10);
@@ -84,7 +107,11 @@ async function processOrders(): Promise<void> {
         const processResult = await registry.shouldProcessOrder(order);
 
         if (!processResult.shouldProcess) {
-          Logger.debug(`Order ${order.external_id} already processed (${order.status}), skipping`);
+          if (processResult.reason === 'DB_ERROR') {
+            Logger.warn(`Registry unavailable for order ${order.external_id}, skipping to prevent duplicates`);
+          } else {
+            Logger.debug(`Order ${order.external_id} already processed (${order.status}), skipping`);
+          }
           continue;
         }
 
@@ -93,15 +120,28 @@ async function processOrders(): Promise<void> {
 
           if (order.status === 'PENDING') {
             await dispatcher.sendConfirmationAlert(order.external_id, order.amount);
-            await registry.register(order.external_id, order.amount, 'PENDING');
+            await retryRegistryOperation(() =>
+              registry.register(order.external_id, order.amount, 'PENDING')
+            );
             pendingCount++;
             Logger.info(`Order ${order.external_id} registered as PENDING, alert sent`);
           } else if (order.status === 'READY_FOR_QR') {
+            const reserved = await retryRegistryOperation(() =>
+              registry.reserveOrder(order.external_id, order.amount)
+            );
+            if (!reserved) {
+              Logger.warn(`Order ${order.external_id} already reserved, skipping`);
+              continue;
+            }
+
             const qrBuffer = await generator.generateQR(order.amount);
             await dispatcher.sendQRCode(qrBuffer, order.external_id, order.amount);
-            await registry.register(order.external_id, order.amount, 'READY_FOR_QR');
+
+            await retryRegistryOperation(() =>
+              registry.updateOrderStatus(order.external_id, 'COMPLETED')
+            );
             processedCount++;
-            Logger.info(`Order ${order.external_id} processed successfully (QR sent)`);
+            Logger.info(`Order ${order.external_id} processed successfully (QR sent, status COMPLETED)`);
           }
         }
 
@@ -111,22 +151,25 @@ async function processOrders(): Promise<void> {
           const qrBuffer = await generator.generateQR(order.amount);
           await dispatcher.sendQRCode(qrBuffer, order.external_id, order.amount);
 
-          await registry.updateOrderStatus(order.external_id, 'READY_FOR_QR');
+          await retryRegistryOperation(() =>
+            registry.updateOrderStatus(order.external_id, 'COMPLETED')
+          );
           processedCount++;
-          Logger.info(`Order ${order.external_id} QR sent, status updated`);
+          Logger.info(`Order ${order.external_id} QR sent, status updated to COMPLETED`);
         }
 
       } catch (error) {
-        Logger.error(`Failed to process order ${order.external_id}: ${error}`);
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        Logger.error(`Failed to process order ${order.external_id}: ${errorMsg}`);
       }
     }
 
     Logger.info(`--- Cycle complete: ${processedCount} QR sent, ${pendingCount} pending alerts ---`);
 
   } catch (error) {
-    const errorMessage = String(error);
+    const errorMsg = error instanceof Error ? error.message : String(error);
 
-    const isTimeoutError = errorMessage.includes('Timeout') || errorMessage.includes('timeout');
+    const isTimeoutError = errorMsg.includes('Timeout') || errorMsg.includes('timeout');
     const isWaitingForSms = surveillance.getIsWaitingForSms();
     const isSessionValid = await surveillance.checkSessionValid().catch(() => false);
 
@@ -142,8 +185,8 @@ async function processOrders(): Promise<void> {
       }
     }
 
-    Logger.error(`Critical error in processing cycle: ${error}`);
-    await dispatcher.sendErrorMessage(error);
+    Logger.error(`Critical error in processing cycle: ${errorMsg}`);
+    await dispatcher.sendErrorMessage(errorMsg);
     throw error;
   }
 }

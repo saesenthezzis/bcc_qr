@@ -1,4 +1,5 @@
 export type OrderStatus = 'READY_FOR_QR' | 'PENDING';
+export type ProcessStatus = 'PENDING' | 'PROCESSING' | 'READY_FOR_QR' | 'COMPLETED';
 
 export interface Order {
   external_id: string;
@@ -9,7 +10,7 @@ export interface Order {
 export interface ProcessedOrder {
   external_id: string;
   amount: number;
-  status: OrderStatus;
+  status: ProcessStatus;
   created_at: string;
 }
 

@@ -28,3 +28,5 @@ tasks.md
 # OS
 .DS_Store
 Thumbs.db
+
+database_migration.sql

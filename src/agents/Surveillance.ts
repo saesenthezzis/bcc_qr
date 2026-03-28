@@ -105,7 +105,7 @@ export class SurveillanceAgent extends EventEmitter {
     }
 
     this.browser = await chromium.launch({
-      headless: true,
+      headless: process.env.HEADLESS !== 'false',
       args: [
         '--disable-dev-shm-usage',
         '--no-sandbox',

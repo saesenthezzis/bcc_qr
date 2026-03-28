@@ -5,6 +5,7 @@ import { RegistryAgent } from './agents/Registry';
 import { SurveillanceAgent } from './agents/Surveillance';
 import { GeneratorAgent } from './agents/Generator';
 import { DispatcherAgent } from './agents/Dispatcher';
+import { getBccCode } from './utils/InstallmentMapper';
 
 config();
 
@@ -67,6 +68,137 @@ async function retryRegistryOperation<T>(
   }
 
   throw lastError instanceof Error ? lastError : new Error('Unknown registry operation error');
+}
+
+async function parseInstallmentPeriodFromSidebar(surveillance: SurveillanceAgent, orderId: string): Promise<string | null> {
+  try {
+    Logger.info(`[PROD] Order ${orderId} -> Opening sidebar to parse installment period...`);
+    
+    // Get page from surveillance (we need to access private page)
+    const page = (surveillance as any).page;
+    if (!page) {
+      Logger.warn(`[PROD] Order ${orderId} -> Page not available for sidebar parsing`);
+      return null;
+    }
+
+    // Click on the order row to open sidebar
+    const rows = await page.$$('.bcc-table-body__row');
+    
+    for (const row of rows) {
+      const cells = await row.$$('td');
+      if (cells.length < 1) continue;
+      
+      const idCell = cells[0];
+      const rowId = (await idCell.innerText()).trim();
+      
+      if (rowId === orderId) {
+        Logger.info(`[PROD] Order ${orderId} -> Sidebar Open`);
+        await row.click();
+        await page.waitForTimeout(3000); // Wait for sidebar to fully load
+        break;
+      }
+    }
+
+    // Wait for sidebar to appear
+    await page.waitForTimeout(1000);
+
+    // Parse installment period using precise selector
+    try {
+      // Try precise selector first: div:has(> span:text("Рассрочка")) >> span.bcc-typography-paragraph_view_medium
+      const installmentElement = await page.$('div:has(> span:text("Рассрочка")) span.bcc-typography-paragraph_view_medium');
+      
+      if (installmentElement) {
+        const installmentText = await installmentElement.innerText();
+        
+        // Parse the value (e.g., "18 мес." -> "18 месяцев")
+        const periodMatch = installmentText.match(/(\d+)\s*(месяц|месяца|месяцев|мес\.?)/i);
+        if (periodMatch) {
+          const installmentPeriod = `${periodMatch[1]} месяцев`;
+          const bccCode = getBccCode(installmentPeriod);
+          Logger.info(`[PROD] Order ${orderId} -> Term: ${periodMatch[1]}m -> Code: ${bccCode}`);
+          
+          // Close sidebar using close button
+          await closeSidebar(page, orderId);
+          
+          return installmentPeriod;
+        }
+      }
+    } catch (selectorError) {
+      Logger.warn(`[PROD] Order ${orderId} -> Precise selector failed, trying fallback`);
+    }
+
+    // Fallback: search in all text
+    const bodyText = await page.textContent('body');
+    if (bodyText) {
+      const periodMatch = bodyText.match(/(\d+)\s*(месяц|месяца|месяцев|мес\.?)/i);
+      if (periodMatch) {
+        const installmentPeriod = `${periodMatch[1]} месяцев`;
+        const bccCode = getBccCode(installmentPeriod);
+        Logger.info(`[PROD] Order ${orderId} -> Term: ${periodMatch[1]}m (fallback) -> Code: ${bccCode}`);
+        
+        // Close sidebar
+        await closeSidebar(page, orderId);
+        
+        return installmentPeriod;
+      }
+    }
+
+    Logger.warn(`[PROD] Order ${orderId} -> Installment period not found, using default`);
+    
+    // Close sidebar anyway
+    await closeSidebar(page, orderId);
+    
+    // Return default value (6 months) as fallback
+    Logger.warn(`[PROD] Order ${orderId} -> Using default: 6m -> Code: KZ282`);
+    return '6 месяцев';
+    
+  } catch (error) {
+    Logger.error(`[PROD] Order ${orderId} -> Failed to parse installment period: ${error}`);
+    
+    // Try to close sidebar
+    try {
+      const page = (surveillance as any).page;
+      if (page) await closeSidebar(page, orderId);
+    } catch (closeError) {
+      Logger.warn(`[PROD] Order ${orderId} -> Could not close sidebar: ${closeError}`);
+    }
+    
+    // Return default value
+    return '6 месяцев';
+  }
+}
+
+async function closeSidebar(page: any, orderId: string): Promise<void> {
+  try {
+    // Try to click close button: div.bcc-fridge-header__close button
+    const closeButton = await page.$('div.bcc-fridge-header__close button');
+    if (closeButton) {
+      await closeButton.click();
+      Logger.info(`[PROD] Order ${orderId} -> Sidebar closed`);
+      await page.waitForTimeout(500);
+      return;
+    }
+    
+    // Fallback: try .bcc-button_iconOnly in header
+    const iconButton = await page.$('.bcc-fridge-header .bcc-button_iconOnly');
+    if (iconButton) {
+      await iconButton.click();
+      Logger.info(`[PROD] Order ${orderId} -> Sidebar closed (icon button)`);
+      await page.waitForTimeout(500);
+      return;
+    }
+    
+    // Last resort: Escape key
+    await page.keyboard.press('Escape');
+    Logger.info(`[PROD] Order ${orderId} -> Sidebar closed (Escape)`);
+    await page.waitForTimeout(500);
+    
+  } catch (error) {
+    Logger.warn(`[PROD] Order ${orderId} -> Error closing sidebar: ${error}`);
+    // Try Escape as last resort
+    await page.keyboard.press('Escape').catch(() => {});
+    await page.waitForTimeout(500);
+  }
 }
 
 async function startKeepAliveServer(): Promise<void> {
@@ -134,28 +266,40 @@ async function processOrders(): Promise<void> {
               continue;
             }
 
-            const qrBuffer = await generator.generateQR(order.amount);
+            // Parse installment period from sidebar
+            const installmentPeriod = await parseInstallmentPeriodFromSidebar(surveillance, order.external_id);
+            
+            // Generate QR with dynamic installment code
+            const qrBuffer = await generator.generateQR(order.amount, installmentPeriod || undefined);
+            Logger.info(`[PROD] Order ${order.external_id} -> QR Generated`);
+            
             await dispatcher.sendQRCode(qrBuffer, order.external_id, order.amount);
 
             await retryRegistryOperation(() =>
               registry.updateOrderStatus(order.external_id, 'COMPLETED')
             );
             processedCount++;
-            Logger.info(`Order ${order.external_id} processed successfully (QR sent, status COMPLETED)`);
+            Logger.info(`[PROD] Order ${order.external_id} -> Completed (QR sent to Telegram, DB updated)`);
           }
         }
 
         if (processResult.reason === 'STATUS_CHANGED') {
           Logger.info(`Order ${order.external_id} status changed to READY_FOR_QR`);
 
-          const qrBuffer = await generator.generateQR(order.amount);
+          // Parse installment period from sidebar
+          const installmentPeriod = await parseInstallmentPeriodFromSidebar(surveillance, order.external_id);
+          
+          // Generate QR with dynamic installment code
+          const qrBuffer = await generator.generateQR(order.amount, installmentPeriod || undefined);
+          Logger.info(`[PROD] Order ${order.external_id} -> QR Generated`);
+          
           await dispatcher.sendQRCode(qrBuffer, order.external_id, order.amount);
 
           await retryRegistryOperation(() =>
             registry.updateOrderStatus(order.external_id, 'COMPLETED')
           );
           processedCount++;
-          Logger.info(`Order ${order.external_id} QR sent, status updated to COMPLETED`);
+          Logger.info(`[PROD] Order ${order.external_id} -> Completed (QR sent to Telegram, DB updated)`);
         }
 
       } catch (error) {
@@ -200,14 +344,36 @@ async function main(): Promise<void> {
   const restartTimeout = GRACEFUL_RESTART_HOURS * 60 * 60 * 1000;
 
   try {
+    // Safety Check 1: Verify Supabase connection
+    Logger.info('[STARTUP] Verifying Supabase connection...');
+    try {
+      const testCheck = await registry.checkWithStatus('STARTUP_TEST');
+      Logger.info('[STARTUP] ✅ Supabase connection verified');
+    } catch (dbError) {
+      Logger.error(`[STARTUP] ❌ Supabase connection failed: ${dbError}`);
+      throw new Error('Cannot start without database connection');
+    }
+
+    // Safety Check 2: Initialize browser and validate session
+    Logger.info('[STARTUP] Initializing browser...');
     await surveillance.initBrowser();
+    Logger.info('[STARTUP] ✅ Browser initialized');
+
+    // Safety Check 3: Validate bank session
+    Logger.info('[STARTUP] Validating bank session...');
+    const sessionValid = await surveillance.checkSessionValid().catch(() => false);
+    if (sessionValid) {
+      Logger.info('[STARTUP] ✅ Bank session is valid');
+    } else {
+      Logger.warn('[STARTUP] ⚠️ Bank session needs login (will authenticate on first cycle)');
+    }
 
     if (isRender) {
       Logger.info('Running on Render cloud, sending startup notification...');
       await dispatcher.sendStartupNotification();
     }
 
-    Logger.info('CreditBridge RPA Engine is ready and running!');
+    Logger.info('[STARTUP] ✅ All systems ready - CreditBridge RPA Engine is running!');
 
     const startTime = Date.now();
 

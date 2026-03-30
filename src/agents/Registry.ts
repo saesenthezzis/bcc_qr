@@ -1,6 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Logger } from '../utils/Logger';
-import { OrderStatus, Order } from '../types';
+import { OrderStatus, Order, SmsConfirmation, SmsStatus } from '../types';
 
 export type ProcessStatus = 'PENDING' | 'PROCESSING' | 'READY_FOR_QR' | 'COMPLETED';
 
@@ -219,6 +219,211 @@ export class RegistryAgent {
       const errorMsg = error instanceof Error ? error.message : String(error);
       Logger.error(`Failed to delete session: ${errorMsg}`);
       return false;
+    }
+  }
+
+  // SMS Confirmation Methods
+
+  async registerSmsConfirmation(externalId: string, amount: number, status: SmsStatus, telegramMessageId?: string): Promise<void> {
+    try {
+      const { error } = await this.client
+        .from('sms_confirmations')
+        .insert({
+          external_id: externalId,
+          amount: amount,
+          status: status,
+          sms_attempts: 0,
+          sent_count: 0,
+          telegram_message_id: telegramMessageId,
+        });
+
+      if (error) {
+        if (error.code === '23505') {
+          Logger.warn(`SMS confirmation for ${externalId} already exists`);
+          return;
+        }
+        Logger.error(`Registry registerSmsConfirmation error: ${error.message}`);
+        throw new Error(`Database insert failed: ${error.message}`);
+      }
+
+      Logger.info(`SMS confirmation registered for ${externalId} with status ${status}`);
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      Logger.error(`Failed to register SMS confirmation ${externalId}: ${errorMsg}`);
+      throw error;
+    }
+  }
+
+  async getSmsConfirmation(externalId: string): Promise<SmsConfirmation | null> {
+    try {
+      const { data, error } = await this.client
+        .from('sms_confirmations')
+        .select('*')
+        .eq('external_id', externalId)
+        .single();
+
+      if (error && error.code !== 'PGRST116') {
+        Logger.error(`Registry getSmsConfirmation error: ${error.message}`);
+        return null;
+      }
+
+      return data as SmsConfirmation | null;
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      Logger.error(`Failed to get SMS confirmation ${externalId}: ${errorMsg}`);
+      return null;
+    }
+  }
+
+  async updateSmsAttempts(externalId: string): Promise<number> {
+    try {
+      const current = await this.getSmsConfirmation(externalId);
+      if (!current) {
+        Logger.warn(`SMS confirmation ${externalId} not found for attempt update`);
+        return 0;
+      }
+
+      const newAttempts = current.sms_attempts + 1;
+
+      const { error } = await this.client
+        .from('sms_confirmations')
+        .update({ sms_attempts: newAttempts })
+        .eq('external_id', externalId);
+
+      if (error) {
+        Logger.error(`Registry updateSmsAttempts error: ${error.message}`);
+        throw new Error(`Database update failed: ${error.message}`);
+      }
+
+      Logger.info(`SMS attempts for ${externalId} updated to ${newAttempts}`);
+      return newAttempts;
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      Logger.error(`Failed to update SMS attempts ${externalId}: ${errorMsg}`);
+      throw error;
+    }
+  }
+
+  async checkSmsAttempts(externalId: string): Promise<{ attempts: number; limitExceeded: boolean }> {
+    try {
+      const confirmation = await this.getSmsConfirmation(externalId);
+      if (!confirmation) {
+        return { attempts: 0, limitExceeded: false };
+      }
+
+      const maxAttempts = parseInt(process.env.SMS_MAX_ATTEMPTS || '3', 10);
+      return {
+        attempts: confirmation.sms_attempts,
+        limitExceeded: confirmation.sms_attempts >= maxAttempts,
+      };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      Logger.error(`Failed to check SMS attempts ${externalId}: ${errorMsg}`);
+      return { attempts: 0, limitExceeded: false };
+    }
+  }
+
+  async updateSmsStatus(externalId: string, newStatus: SmsStatus): Promise<void> {
+    try {
+      const { error } = await this.client
+        .from('sms_confirmations')
+        .update({ status: newStatus })
+        .eq('external_id', externalId);
+
+      if (error) {
+        Logger.error(`Registry updateSmsStatus error: ${error.message}`);
+        throw new Error(`Database update failed: ${error.message}`);
+      }
+
+      Logger.info(`SMS confirmation ${externalId} status updated to ${newStatus}`);
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      Logger.error(`Failed to update SMS status ${externalId}: ${errorMsg}`);
+      throw error;
+    }
+  }
+
+  async incrementSentCount(externalId: string): Promise<number> {
+    try {
+      const current = await this.getSmsConfirmation(externalId);
+      if (!current) {
+        Logger.warn(`SMS confirmation ${externalId} not found for sent_count increment`);
+        return 0;
+      }
+
+      const newCount = current.sent_count + 1;
+
+      const { error } = await this.client
+        .from('sms_confirmations')
+        .update({ 
+          sent_count: newCount,
+          last_sent_at: new Date().toISOString()
+        })
+        .eq('external_id', externalId);
+
+      if (error) {
+        Logger.error(`Registry incrementSentCount error: ${error.message}`);
+        throw new Error(`Database update failed: ${error.message}`);
+      }
+
+      Logger.info(`SMS sent_count for ${externalId} incremented to ${newCount}`);
+      return newCount;
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      Logger.error(`Failed to increment sent_count ${externalId}: ${errorMsg}`);
+      throw error;
+    }
+  }
+
+  async updateSmsStatusWithCount(externalId: string, newStatus: SmsStatus): Promise<void> {
+    try {
+      const current = await this.getSmsConfirmation(externalId);
+      if (!current) {
+        Logger.warn(`SMS confirmation ${externalId} not found for status update`);
+        return;
+      }
+
+      const newCount = current.sent_count + 1;
+
+      const { error } = await this.client
+        .from('sms_confirmations')
+        .update({ 
+          status: newStatus,
+          sent_count: newCount,
+          last_sent_at: new Date().toISOString()
+        })
+        .eq('external_id', externalId);
+
+      if (error) {
+        Logger.error(`Registry updateSmsStatusWithCount error: ${error.message}`);
+        throw new Error(`Database update failed: ${error.message}`);
+      }
+
+      Logger.info(`SMS confirmation ${externalId} updated: status=${newStatus}, sent_count=${newCount}`);
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      Logger.error(`Failed to update SMS status with count ${externalId}: ${errorMsg}`);
+      throw error;
+    }
+  }
+
+  async updateTelegramMessageId(externalId: string, messageId: string): Promise<void> {
+    try {
+      const { error } = await this.client
+        .from('sms_confirmations')
+        .update({ telegram_message_id: messageId })
+        .eq('external_id', externalId);
+
+      if (error) {
+        Logger.error(`Registry updateTelegramMessageId error: ${error.message}`);
+        throw new Error(`Database update failed: ${error.message}`);
+      }
+
+      Logger.info(`Telegram message ID updated for ${externalId}: ${messageId}`);
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      Logger.error(`Failed to update telegram message ID ${externalId}: ${errorMsg}`);
+      throw error;
     }
   }
 }

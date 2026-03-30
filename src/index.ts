@@ -13,8 +13,17 @@ Logger.info('CreditBridge RPA Engine starting...');
 
 const isProduction = process.env.NODE_ENV === 'production';
 const isRender = process.env.RENDER === 'true' || !!process.env.PORT;
+const isMockMode = process.env.BROWSER_MOCK === 'true';
 
 Logger.info(`Environment: NODE_ENV=${process.env.NODE_ENV || 'development'}, isRender=${isRender}`);
+
+if (isMockMode) {
+  Logger.warn('⚠️  MOCK MODE ENABLED - Browser actions will be simulated');
+  Logger.warn('⚠️  Set BROWSER_MOCK=false in .env for production use');
+} else {
+  Logger.info('✅ [LIVE] Bot running in LIVE mode - monitoring real orders from bank');
+  Logger.info('✅ [LIVE] Mock mode disabled - all browser actions are real');
+}
 
 const requiredEnvVars = ['BANK_URL', 'BANK_LOGIN', 'BANK_PASSWORD', 'SUPABASE_URL', 'SUPABASE_KEY', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_IDS'];
 for (const envVar of requiredEnvVars) {
@@ -46,6 +55,10 @@ surveillance.on('smsRequired', async ({ screenshot, timestamp }) => {
 
 const CHECK_INTERVAL_MS = (parseInt(process.env.CHECK_INTERVAL_MINUTES || '1') * 60 * 1000);
 const GRACEFUL_RESTART_HOURS = 3;
+
+// Global SMS processing lock
+let isProcessingSms = false;
+let currentSmsOrderId: string | null = null;
 
 async function retryRegistryOperation<T>(
   operation: () => Promise<T>,
@@ -224,8 +237,193 @@ async function startKeepAliveServer(): Promise<void> {
   });
 }
 
+async function processSmsConfirmation(orderId: string, amount: number): Promise<boolean> {
+  // Set global lock
+  isProcessingSms = true;
+  currentSmsOrderId = orderId;
+  Logger.info(`[LOCK] SMS processing started for order ${orderId}`);
+
+  try {
+    Logger.info(`[SMS] Processing SMS confirmation for order ${orderId}`);
+
+    // Check if SMS confirmation is required
+    const requiresSms = await surveillance.checkSmsConfirmationRequired(orderId);
+    if (!requiresSms) {
+      Logger.info(`[SMS] Order ${orderId} does not require SMS confirmation`);
+      return false;
+    }
+
+    // Check SMS attempts limit
+    const attemptsCheck = await registry.checkSmsAttempts(orderId);
+    if (attemptsCheck.limitExceeded) {
+      Logger.warn(`[SMS] Order ${orderId} exceeded SMS attempts limit (${attemptsCheck.attempts})`);
+      await dispatcher.sendSmsLimitExceeded(orderId, attemptsCheck.attempts);
+      return false;
+    }
+
+    // Send confirmation request to admin with Cancel button
+    const messageId = await dispatcher.sendSmsConfirmationRequest(orderId, amount);
+    if (!messageId) {
+      Logger.warn(`[SMS] Failed to send confirmation request for ${orderId}`);
+      return false;
+    }
+
+    // Update telegram_message_id in DB
+    await registry.updateTelegramMessageId(orderId, messageId);
+
+    // Countdown configuration for admin decision
+    const DECISION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+    const DECISION_UPDATE_INTERVAL_MS = 60 * 1000; // 1 minute
+    let decisionRemainingMinutes = 5;
+
+    // Start countdown interval for admin decision
+    const decisionCountdownInterval = setInterval(async () => {
+      decisionRemainingMinutes--;
+      if (decisionRemainingMinutes > 0 && messageId) {
+        const countdownText = `⏳ Ожидание решения... Осталось ${decisionRemainingMinutes} мин.`;
+        await dispatcher.updateDecisionCountdown(orderId, messageId, countdownText);
+      }
+    }, DECISION_UPDATE_INTERVAL_MS);
+
+    // Wait for admin confirmation (with cancellation support)
+    const confirmed = await new Promise<boolean>((resolve) => {
+      const timeout = setTimeout(() => {
+        clearInterval(decisionCountdownInterval);
+        dispatcher.unregisterSmsCodeCallback(orderId);
+        resolve(false);
+      }, DECISION_TIMEOUT_MS);
+
+      dispatcher.registerSmsCodeCallback(orderId, (response) => {
+        clearTimeout(timeout);
+        clearInterval(decisionCountdownInterval);
+        if (response === 'CANCELLED') {
+          Logger.info(`[SMS] Admin cancelled SMS sending for ${orderId}`);
+          // Update status in DB
+          registry.updateSmsStatus(orderId, 'USER_REFUSED_SMS').catch((err) => {
+            Logger.error(`[SMS] Failed to update status to USER_REFUSED_SMS: ${err}`);
+          });
+          resolve(false);
+        } else {
+          resolve(response === 'CONFIRMED');
+        }
+      });
+    });
+
+    if (!confirmed) {
+      Logger.warn(`[SMS] Admin did not confirm SMS sending for ${orderId}`);
+      return false;
+    }
+
+    // Click "Send SMS" button
+    const clicked = await surveillance.clickSendSmsButton(orderId);
+    if (!clicked) {
+      Logger.error(`[SMS] Failed to click Send SMS button for ${orderId}`);
+      return false;
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    // Check for blocked modal
+    const isBlocked = await surveillance.checkSmsBlockedModal();
+    if (isBlocked) {
+      Logger.warn(`[SMS] SMS blocked for order ${orderId}`);
+      const screenshot = await surveillance.takeSmsScreenshot(orderId, 'blocked');
+      if (screenshot) {
+        await dispatcher.sendSmsBlockedAlert(orderId, screenshot);
+      }
+      await surveillance.closeSmsBlockedModal();
+      await registry.updateSmsStatus(orderId, 'SMS_BLOCKED');
+      await surveillance.hardRefresh();
+      return false;
+    }
+
+    // Take screenshot of SMS input field
+    const screenshot = await surveillance.takeSmsScreenshot(orderId, 'input');
+    if (!screenshot) {
+      Logger.error(`[SMS] Failed to take screenshot for ${orderId}`);
+      return false;
+    }
+
+    // Send SMS code request to admin
+    const codeMessageId = await dispatcher.sendSmsCodeRequest(orderId, screenshot);
+    await registry.updateSmsStatus(orderId, 'SMS_SENT');
+
+    // Countdown configuration
+    const TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+    const UPDATE_INTERVAL_MS = 60 * 1000; // 1 minute
+    let remainingMinutes = 5;
+
+    // Start countdown interval
+    const countdownInterval = setInterval(async () => {
+      remainingMinutes--;
+      if (remainingMinutes > 0 && codeMessageId) {
+        const countdownText = `⏳ Ожидание кода... Осталось ${remainingMinutes} мин.`;
+        await dispatcher.updateCountdownMessage(orderId, codeMessageId, countdownText);
+      }
+    }, UPDATE_INTERVAL_MS);
+
+    // Wait for SMS code from admin with timeout
+    const smsCode = await Promise.race([
+      new Promise<string | null>((resolve) => {
+        dispatcher.registerSmsCodeCallback(orderId, (code) => {
+          resolve(code);
+        });
+      }),
+      new Promise<string | null>((resolve) => {
+        setTimeout(() => {
+          dispatcher.unregisterSmsCodeCallback(orderId);
+          resolve(null);
+        }, TIMEOUT_MS);
+      })
+    ]);
+
+    // Clear countdown interval
+    clearInterval(countdownInterval);
+
+    if (!smsCode) {
+      Logger.warn(`[SMS] No SMS code received for ${orderId} (timeout after 5 minutes)`);
+      await registry.updateSmsStatus(orderId, 'SMS_TIMEOUT');
+      await dispatcher.sendTimeoutAlert(orderId);
+      return false;
+    }
+
+    // Enter SMS code
+    const entered = await surveillance.enterSmsCode(smsCode, orderId);
+    if (!entered) {
+      Logger.error(`[SMS] Failed to enter SMS code for ${orderId}`);
+      return false;
+    }
+
+    // Increment attempts
+    await registry.updateSmsAttempts(orderId);
+
+    // Increment sent_count
+    await registry.incrementSentCount(orderId);
+
+    // Force refresh to check new status
+    await surveillance.hardRefresh();
+    Logger.info(`[SMS] SMS confirmation completed for ${orderId}`);
+
+    return true;
+  } catch (error) {
+    Logger.error(`[SMS] Error processing SMS confirmation for ${orderId}: ${error}`);
+    return false;
+  } finally {
+    // Always release lock
+    isProcessingSms = false;
+    currentSmsOrderId = null;
+    Logger.info(`[LOCK] SMS processing lock released for order ${orderId}`);
+  }
+}
+
 async function processOrders(): Promise<void> {
   try {
+    // Check if SMS processing is in progress - BLOCK cycle if true
+    if (isProcessingSms) {
+      Logger.info(`[LOCK] SMS processing in progress for order ${currentSmsOrderId}, skipping this cycle`);
+      return;
+    }
+
     Logger.info('--- Starting order processing cycle ---');
 
     const orders = await surveillance.runRotation();
@@ -233,9 +431,79 @@ async function processOrders(): Promise<void> {
 
     let processedCount = 0;
     let pendingCount = 0;
+    let smsCount = 0;
 
     for (const order of orders) {
       try {
+        // DEBUG: Log order status
+        Logger.debug(`[DEBUG] Processing order ${order.external_id} with status: ${order.status}`);
+        
+        // PRIORITY: For ALL PENDING orders, ALWAYS check for SMS button on site
+        if (order.status === 'PENDING') {
+          Logger.info(`[INFO] Order ${order.external_id} has PENDING status. Checking for SMS button...`);
+          
+          // Skip Logic: Check if SMS already processed (sent_count > 0)
+          const smsConfirmation = await registry.getSmsConfirmation(order.external_id);
+          if (smsConfirmation && smsConfirmation.sent_count > 0) {
+            Logger.debug(`[SKIP] Order ${order.external_id} already processed SMS (sent_count: ${smsConfirmation.sent_count}), skipping`);
+            continue;
+          }
+          
+          // Step 1: Open sidebar and verify SMS button exists
+          const requiresSms = await surveillance.checkSmsConfirmationRequired(order.external_id);
+          
+          if (requiresSms) {
+            Logger.info(`[INFO] Order ${order.external_id} needs confirmation. SMS button found in sidebar.`);
+            
+            // Step 2: Check if Telegram notification was already sent
+            const existingSmsConfirmation = await registry.getSmsConfirmation(order.external_id);
+            
+            if (!existingSmsConfirmation || !existingSmsConfirmation.telegram_message_id) {
+              // Step 3: Register in DB if not exists
+              if (!existingSmsConfirmation) {
+                Logger.info(`[SMS] Registering SMS confirmation for order ${order.external_id}`);
+                await registry.registerSmsConfirmation(order.external_id, order.amount, 'WAITING_FOR_USER_ACTION');
+              }
+              
+              // Step 4: Process SMS confirmation
+              Logger.info(`[SMS] Processing SMS confirmation for order ${order.external_id}`);
+              const smsSuccess = await processSmsConfirmation(order.external_id, order.amount);
+              
+              if (smsSuccess) {
+                smsCount++;
+                Logger.info(`[SMS] Order ${order.external_id} SMS confirmation successful`);
+              } else {
+                Logger.warn(`[SMS] Order ${order.external_id} SMS confirmation failed or timed out`);
+              }
+            } else {
+              Logger.debug(`Order ${order.external_id} SMS request already sent to Telegram (message_id: ${existingSmsConfirmation.telegram_message_id}), waiting for response`);
+            }
+            continue; // Skip further processing for this order
+          } else {
+            // No SMS button - regular PENDING order
+            Logger.info(`Order ${order.external_id} is PENDING but no SMS button found - treating as regular PENDING`);
+            
+            // Check if already registered in main orders table
+            const processResult = await registry.shouldProcessOrder(order);
+            
+            if (!processResult.shouldProcess) {
+              Logger.debug(`Order ${order.external_id} already registered as PENDING, skipping`);
+              continue;
+            }
+            
+            // New PENDING order without SMS - send regular alert
+            Logger.info(`Processing new PENDING order ${order.external_id} without SMS requirement`);
+            await dispatcher.sendConfirmationAlert(order.external_id, order.amount);
+            await retryRegistryOperation(() =>
+              registry.register(order.external_id, order.amount, 'PENDING')
+            );
+            pendingCount++;
+            Logger.info(`Order ${order.external_id} registered as PENDING, alert sent`);
+            continue; // Skip further processing for this order
+          }
+        }
+
+        // Standard processing logic
         const processResult = await registry.shouldProcessOrder(order);
 
         if (!processResult.shouldProcess) {
@@ -250,14 +518,8 @@ async function processOrders(): Promise<void> {
         if (processResult.reason === 'NEW') {
           Logger.info(`Processing new order ${order.external_id} (${order.amount} KZT, ${order.status})`);
 
-          if (order.status === 'PENDING') {
-            await dispatcher.sendConfirmationAlert(order.external_id, order.amount);
-            await retryRegistryOperation(() =>
-              registry.register(order.external_id, order.amount, 'PENDING')
-            );
-            pendingCount++;
-            Logger.info(`Order ${order.external_id} registered as PENDING, alert sent`);
-          } else if (order.status === 'READY_FOR_QR') {
+          if (order.status === 'READY_FOR_QR') {
+
             const reserved = await retryRegistryOperation(() =>
               registry.reserveOrder(order.external_id, order.amount)
             );

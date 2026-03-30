@@ -736,4 +736,472 @@ export class SurveillanceAgent extends EventEmitter {
       Logger.info('Surveillance: Browser closed');
     }
   }
+
+  // SMS Confirmation Methods
+
+  async checkSmsConfirmationRequired(orderId: string): Promise<boolean> {
+    // Mock mode
+    if (process.env.BROWSER_MOCK === 'true') {
+      Logger.info(`[MOCK] Checking SMS confirmation for ${orderId} - returning true`);
+      return true;
+    }
+
+    if (!this.page) {
+      throw new Error('Page not initialized. Call login() first.');
+    }
+
+    try {
+      Logger.info(`[INFO] Order ${orderId} needs confirmation. Opening sidebar to verify SMS button...`);
+
+      // Step 1: Close any open sidebar first
+      const backdropOpen = await this.page.$('.bcc-fridge-backdrop_open').catch(() => null);
+      if (backdropOpen) {
+        Logger.info(`[INFO] Sidebar already open, closing it first...`);
+        
+        // Try multiple methods to close sidebar
+        // Method 1: Click on backdrop
+        try {
+          await backdropOpen.click({ timeout: 2000 });
+          Logger.info(`[INFO] Clicked backdrop to close sidebar`);
+          await this.page.waitForTimeout(1000);
+        } catch (backdropError) {
+          Logger.warn(`[INFO] Failed to click backdrop, trying close button...`);
+          
+          // Method 2: Find and click close button
+          const closeButton = await this.page.$('button[aria-label="Close"]').catch(() => null) ||
+                              await this.page.$('.bcc-fridge button.bcc-button_iconOnly').catch(() => null);
+          if (closeButton) {
+            await closeButton.click({ timeout: 2000 }).catch(() => {});
+            Logger.info(`[INFO] Clicked close button`);
+            await this.page.waitForTimeout(1000);
+          } else {
+            // Method 3: Escape key as last resort
+            await this.page.keyboard.press('Escape');
+            Logger.info(`[INFO] Pressed Escape key`);
+            await this.page.waitForTimeout(1000);
+          }
+        }
+        
+        // Verify sidebar is closed
+        const stillOpen = await this.page.$('.bcc-fridge-backdrop_open').catch(() => null);
+        if (stillOpen) {
+          Logger.warn(`[WARN] Sidebar still open after close attempt, forcing page refresh`);
+          await this.page.reload({ waitUntil: 'networkidle' });
+          await this.page.waitForTimeout(2000);
+        }
+      }
+
+      // Find the order row
+      const rows = await this.page.$$('.bcc-table-body__row');
+      for (const row of rows) {
+        const cells = await row.$$('td');
+        if (cells.length < 1) continue;
+
+        const idCell = cells[0];
+        const rowId = (await idCell.innerText()).trim();
+
+        if (rowId === orderId) {
+          // Click to open sidebar
+          Logger.info(`[INFO] Clicking on order ${orderId} to open sidebar...`);
+          await row.click();
+          await this.page.waitForTimeout(1500);
+
+          // Wait for sidebar to be fully visible
+          try {
+            await this.page.waitForSelector('div.bcc-fridge_content', { 
+              state: 'visible', 
+              timeout: 10000 
+            });
+            Logger.info(`[INFO] Sidebar content loaded for order ${orderId}`);
+          } catch (sidebarError) {
+            Logger.warn(`[INFO] Sidebar content not detected, continuing anyway...`);
+          }
+
+          // Additional wait for animations
+          await this.page.waitForTimeout(1500);
+          Logger.info(`[INFO] Sidebar opened for order ${orderId}`);
+
+          // Try multiple selectors with retry logic
+          const smsButtonSelectors = [
+            'div.bcc-fridge-footer button:has-text("Отправить SMS")',
+            'button[data-pw="button"]:has-text("Отправить SMS")',
+            'button:has-text("Отправить SMS")',
+            'button.bcc-button:has-text("Отправить SMS")',
+            'div.bcc-fridge button:has-text("Отправить")',
+          ];
+
+          let hasSmsButton = false;
+          let foundSelector = '';
+
+          // First attempt
+          for (const selector of smsButtonSelectors) {
+            const button = await this.page.$(selector);
+            if (button) {
+              // Check if button is actually visible and stable
+              const isVisible = await button.isVisible().catch(() => false);
+              if (isVisible) {
+                hasSmsButton = true;
+                foundSelector = selector;
+                Logger.info(`[INFO] ✅ SMS button FOUND with selector: ${selector}`);
+                break;
+              }
+            }
+          }
+
+          // Retry if not found (bank UI might be slow)
+          if (!hasSmsButton) {
+            Logger.info(`[INFO] SMS button not found on first attempt, retrying after 500ms...`);
+            await this.page.waitForTimeout(500);
+
+            for (const selector of smsButtonSelectors) {
+              const button = await this.page.$(selector);
+              if (button) {
+                const isVisible = await button.isVisible().catch(() => false);
+                if (isVisible) {
+                  hasSmsButton = true;
+                  foundSelector = selector;
+                  Logger.info(`[INFO] ✅ SMS button FOUND on retry with selector: ${selector}`);
+                  break;
+                }
+              }
+            }
+          }
+
+          // If still not found, take debug screenshot
+          if (!hasSmsButton) {
+            Logger.warn(`[INFO] ❌ SMS button NOT FOUND for order ${orderId} after retry`);
+            
+            try {
+              const screenshotPath = path.join(this.storagePath, `error_sms_button_not_found_${orderId}.png`);
+              await this.page.screenshot({
+                path: screenshotPath,
+                fullPage: false,
+              });
+              Logger.info(`[DEBUG] Screenshot saved to ${screenshotPath} for debugging`);
+            } catch (screenshotError) {
+              Logger.warn(`[DEBUG] Failed to save debug screenshot: ${screenshotError}`);
+            }
+          }
+
+          // Close sidebar
+          Logger.info(`[INFO] Closing sidebar for order ${orderId}`);
+          await this.page.keyboard.press('Escape');
+          await this.page.waitForTimeout(500);
+
+          return hasSmsButton;
+        }
+      }
+
+      Logger.warn(`Surveillance: Order ${orderId} not found in table`);
+      return false;
+    } catch (error) {
+      Logger.error(`Surveillance: Failed to check SMS confirmation for ${orderId} - ${error}`);
+      
+      // Take error screenshot
+      try {
+        const screenshotPath = path.join(this.storagePath, `error_check_sms_${orderId}.png`);
+        await this.page.screenshot({
+          path: screenshotPath,
+          fullPage: false,
+        });
+        Logger.info(`[DEBUG] Error screenshot saved to ${screenshotPath}`);
+      } catch (screenshotError) {
+        Logger.warn(`[DEBUG] Failed to save error screenshot: ${screenshotError}`);
+      }
+
+      return false;
+    }
+  }
+
+  async clickSendSmsButton(orderId: string): Promise<boolean> {
+    // Mock mode
+    if (process.env.BROWSER_MOCK === 'true') {
+      Logger.info(`[MOCK] Кнопка "Отправить SMS" нажата для ${orderId}`);
+      await new Promise(resolve => setTimeout(resolve, 500));
+      return true;
+    }
+
+    if (!this.page) {
+      throw new Error('Page not initialized. Call login() first.');
+    }
+
+    try {
+      Logger.info(`Surveillance: Clicking Send SMS button for ${orderId}`);
+
+      // Find and click the order row to open sidebar
+      const rows = await this.page.$$('.bcc-table-body__row');
+      for (const row of rows) {
+        const cells = await row.$$('td');
+        if (cells.length < 1) continue;
+
+        const idCell = cells[0];
+        const rowId = (await idCell.innerText()).trim();
+
+        if (rowId === orderId) {
+          await row.click();
+          await this.page.waitForTimeout(2000);
+
+          // Click "Отправить SMS" button
+          const sendSmsButton = await this.page.$('button:has-text("Отправить SMS")');
+          if (sendSmsButton) {
+            await sendSmsButton.click();
+            Logger.info(`Surveillance: Send SMS button clicked for ${orderId}`);
+            await this.page.waitForTimeout(2000);
+            return true;
+          } else {
+            Logger.warn(`Surveillance: Send SMS button not found for ${orderId}`);
+            return false;
+          }
+        }
+      }
+
+      Logger.warn(`Surveillance: Order ${orderId} not found in table`);
+      return false;
+    } catch (error) {
+      Logger.error(`Surveillance: Failed to click Send SMS button for ${orderId} - ${error}`);
+      return false;
+    }
+  }
+
+  async checkSmsBlockedModal(): Promise<boolean> {
+    // Mock mode - never blocked in mock
+    if (process.env.BROWSER_MOCK === 'true') {
+      Logger.info(`[MOCK] Checking SMS blocked modal - returning false (not blocked)`);
+      return false;
+    }
+
+    if (!this.page) {
+      throw new Error('Page not initialized. Call login() first.');
+    }
+
+    try {
+      // Check for blocked modal with multiple possible selectors
+      const blockedSelectors = [
+        'h4:has-text("Вы несколько раз ввели неверно SMS-код")',
+        'text="Вы несколько раз ввели неверно SMS-код"',
+        '.bcc-modal:has-text("SMS-код")',
+      ];
+
+      for (const selector of blockedSelectors) {
+        const element = await this.page.$(selector);
+        if (element) {
+          const isVisible = await element.isVisible().catch(() => false);
+          if (isVisible) {
+            Logger.warn('Surveillance: SMS blocked modal detected');
+            return true;
+          }
+        }
+      }
+
+      return false;
+    } catch (error) {
+      Logger.error(`Surveillance: Failed to check SMS blocked modal - ${error}`);
+      return false;
+    }
+  }
+
+  async closeSmsBlockedModal(): Promise<void> {
+    if (!this.page) {
+      throw new Error('Page not initialized. Call login() first.');
+    }
+
+    try {
+      Logger.info('Surveillance: Closing SMS blocked modal');
+
+      // Try to find and click close button
+      const closeSelectors = [
+        'div.bcc-modal_container button',
+        'button.bcc-button:has-text("Закрыть")',
+        'button.bcc-button:has-text("ОК")',
+        '.bcc-modal button[aria-label="Close"]',
+      ];
+
+      for (const selector of closeSelectors) {
+        const button = await this.page.$(selector);
+        if (button) {
+          await button.click();
+          Logger.info('Surveillance: SMS blocked modal closed');
+          await this.page.waitForTimeout(1000);
+          return;
+        }
+      }
+
+      // Fallback: press Escape
+      await this.page.keyboard.press('Escape');
+      Logger.info('Surveillance: SMS blocked modal closed with Escape');
+      await this.page.waitForTimeout(1000);
+    } catch (error) {
+      Logger.error(`Surveillance: Failed to close SMS blocked modal - ${error}`);
+    }
+  }
+
+  async enterSmsCode(code: string, orderId: string): Promise<boolean> {
+    // Mock mode
+    if (process.env.BROWSER_MOCK === 'true') {
+      Logger.info(`[MOCK] СМС-код "${code}" введен для ${orderId}, имитация успеха`);
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      Logger.info(`[MOCK] Статус заявки ${orderId} изменен на "Выдано"`);
+      return true;
+    }
+
+    if (!this.page) {
+      throw new Error('Page not initialized. Call login() first.');
+    }
+
+    try {
+      Logger.info(`Surveillance: Entering SMS code for ${orderId}`);
+
+      // Wait for SMS input field
+      const smsInputs = await this.page.$$('input.bcc-input-code__input');
+
+      if (smsInputs.length === 0) {
+        Logger.warn('Surveillance: SMS input fields not found');
+        return false;
+      }
+
+      // Enter code into individual fields
+      if (smsInputs.length >= code.length) {
+        for (let i = 0; i < code.length && i < smsInputs.length; i++) {
+          await smsInputs[i].fill(code[i]);
+          await this.page.waitForTimeout(100);
+        }
+        Logger.info('Surveillance: SMS code entered into individual fields');
+      } else {
+        // Fallback: enter as single string
+        await smsInputs[0].fill(code);
+        Logger.info('Surveillance: SMS code entered as single string');
+      }
+
+      await this.page.waitForTimeout(500);
+
+      // Press Enter or click submit button
+      await this.page.keyboard.press('Enter');
+      await this.page.waitForTimeout(1000);
+
+      // Try to find and click submit button
+      const submitSelectors = [
+        'button[type="submit"]',
+        'button:has-text("Подтвердить")',
+        'button:has-text("Confirm")',
+        'button.bcc-button',
+      ];
+
+      for (const selector of submitSelectors) {
+        const button = await this.page.$(selector);
+        if (button) {
+          await button.click().catch(() => {});
+          Logger.info(`Surveillance: Submit button clicked (${selector})`);
+          break;
+        }
+      }
+
+      Logger.info(`Surveillance: SMS code submitted for ${orderId}`);
+      await this.page.waitForTimeout(2000);
+
+      return true;
+    } catch (error) {
+      Logger.error(`Surveillance: Failed to enter SMS code for ${orderId} - ${error}`);
+      return false;
+    }
+  }
+
+  async takeSmsScreenshot(orderId: string, type: 'input' | 'blocked'): Promise<Buffer | null> {
+    // Mock mode - create a simple mock screenshot
+    if (process.env.BROWSER_MOCK === 'true') {
+      Logger.info(`[MOCK] Creating mock screenshot for ${orderId} (${type})`);
+      // Create a simple 1x1 PNG buffer as mock
+      const mockPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+      return mockPng;
+    }
+
+    if (!this.page) {
+      throw new Error('Page not initialized. Call login() first.');
+    }
+
+    try {
+      const screenshotPath = path.join(this.storagePath, `sms_${type}_${orderId}.png`);
+      await this.page.screenshot({
+        path: screenshotPath,
+        fullPage: false,
+      });
+
+      const buffer = fs.readFileSync(screenshotPath);
+
+      // Clean up file
+      try {
+        fs.unlinkSync(screenshotPath);
+      } catch (unlinkError) {
+        Logger.warn(`Surveillance: Failed to delete screenshot: ${unlinkError}`);
+      }
+
+      Logger.info(`Surveillance: Screenshot taken for ${orderId} (${type})`);
+      return buffer;
+    } catch (error) {
+      Logger.error(`Surveillance: Failed to take screenshot for ${orderId} - ${error}`);
+      return null;
+    }
+  }
+
+  async verifySmsCompletion(orderId: string): Promise<boolean> {
+    // Mock mode - always return true
+    if (process.env.BROWSER_MOCK === 'true') {
+      Logger.info(`[MOCK] Verifying SMS completion for ${orderId} - returning true`);
+      return true;
+    }
+
+    if (!this.page) {
+      throw new Error('Page not initialized. Call login() first.');
+    }
+
+    try {
+      Logger.info(`Surveillance: Verifying SMS completion for ${orderId}`);
+
+      // Check 1: Modal window disappeared
+      const modalVisible = await this.page.$('.bcc-modal').catch(() => null);
+      if (modalVisible) {
+        Logger.debug(`Surveillance: Modal still visible for ${orderId}`);
+        return false;
+      }
+
+      // Check 2: SMS input field disappeared
+      const inputVisible = await this.page.$('input.bcc-input-code__input').catch(() => null);
+      if (inputVisible) {
+        Logger.debug(`Surveillance: SMS input still visible for ${orderId}`);
+        return false;
+      }
+
+      // Check 3: Refresh and check status changed to "Выдано"
+      await this.softRefresh();
+      await this.page.waitForTimeout(2000);
+
+      const orders = await this.extractOrders();
+      const order = orders.find(o => o.external_id === orderId);
+
+      if (order && order.status === 'READY_FOR_QR') {
+        Logger.info(`Surveillance: SMS completion verified for ${orderId} - status is READY_FOR_QR`);
+        return true;
+      }
+
+      Logger.debug(`Surveillance: Order ${orderId} status not yet READY_FOR_QR`);
+      return false;
+    } catch (error) {
+      Logger.error(`Surveillance: Failed to verify SMS completion for ${orderId} - ${error}`);
+      return false;
+    }
+  }
+
+  async closeSidebar(): Promise<void> {
+    if (!this.page) {
+      throw new Error('Page not initialized. Call login() first.');
+    }
+
+    try {
+      Logger.info('Surveillance: Closing sidebar');
+      await this.page.keyboard.press('Escape');
+      await this.page.waitForTimeout(500);
+      Logger.info('Surveillance: Sidebar closed');
+    } catch (error) {
+      Logger.error(`Surveillance: Failed to close sidebar - ${error}`);
+    }
+  }
 }

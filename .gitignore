@@ -21,6 +21,11 @@ npm-debug.log*
 AGENTS.MD
 architecture.md
 tasks.md
+SMS_PROCESS.md
+*.md
+
+# Project context snapshot (local only)
+project_context.md
 
 # IDE
 .vscode/
@@ -31,3 +36,8 @@ tasks.md
 Thumbs.db
 
 database_migration.sql
+SMS_TESTING.md
+SMS_QUICKSTART.md
+database_sms_migration.sql
+test-sms-inject.ts
+TEST_BOT_SETUP.md

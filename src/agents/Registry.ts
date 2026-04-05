@@ -43,19 +43,17 @@ export class RegistryAgent {
     try {
       const { error } = await this.client
         .from('processed_orders')
-        .insert({
+        .upsert({
           external_id: externalId,
           amount: amount,
           status: 'PROCESSING',
+        }, {
+          onConflict: 'external_id',
         });
 
       if (error) {
-        if (error.code === '23505') {
-          this.logger.warn(`Order ${externalId} already reserved by another process`);
-          return false;
-        }
         this.logger.error(`Registry reserveOrder error: ${error.message}`);
-        throw new Error(`Database insert failed: ${error.message}`);
+        return false;
       }
 
       this.logger.info(`Order ${externalId} reserved with status PROCESSING`);
@@ -63,7 +61,7 @@ export class RegistryAgent {
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       this.logger.error(`Failed to reserve order ${externalId}: ${errorMsg}`);
-      throw error;
+      return false;
     }
   }
 
@@ -137,22 +135,23 @@ export class RegistryAgent {
     try {
       const { error } = await this.client
         .from('processed_orders')
-        .insert({
+        .upsert({
           external_id: externalId,
           amount: amount,
           status: status,
+        }, {
+          onConflict: 'external_id',
         });
 
       if (error) {
         this.logger.error(`Registry register error: ${error.message}`);
-        throw new Error(`Database insert failed: ${error.message}`);
+        return;
       }
 
       this.logger.info(`Order ${externalId} registered in database with status ${status}`);
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       this.logger.error(`Failed to register order ${externalId}: ${errorMsg}`);
-      throw error;
     }
   }
 

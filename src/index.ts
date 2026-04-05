@@ -5,6 +5,8 @@ import { RegistryAgent } from './agents/Registry';
 import { SurveillanceAgent } from './agents/Surveillance';
 import { GeneratorAgent } from './agents/Generator';
 import { DispatcherAgent } from './agents/Dispatcher';
+import { SmsStatus } from './types';
+import { SmsFlowStatus } from './types/SmsFlowStatus';
 
 config();
 
@@ -60,6 +62,48 @@ const GRACEFUL_RESTART_HOURS = 3;
 
 // Global monitoring pause flag
 let isMonitoringPaused: boolean = false;
+let isProcessingSms: boolean = false;
+let currentSmsOrderId: string | null = null;
+
+async function processSmsConfirmation(
+  orderId: string,
+  amount: number,
+  order: { external_id: string; amount: number }
+): Promise<void> {
+  isProcessingSms = true;
+  currentSmsOrderId = orderId;
+  Logger.info(`[LOCK] SMS lock acquired for ${orderId}`);
+
+  try {
+    const result = await dispatcher.performSmsFlow(orderId, amount);
+    Logger.info(`[SMS] Flow finished for ${order.external_id} with status ${result}`);
+
+    if (result === SmsFlowStatus.SUCCESS) {
+      Logger.info(`[SMS] Order ${order.external_id} confirmed successfully`);
+    } else if (result === SmsFlowStatus.CANCELLED) {
+      Logger.info(`[SMS] Order ${order.external_id} SMS flow cancelled by user`);
+    } else {
+      Logger.warn(`[SMS] Order ${order.external_id} SMS flow finished with timeout`);
+    }
+  } catch (error) {
+    Logger.error(`[SMS] Failed to process SMS confirmation for ${order.external_id}: ${error}`);
+  } finally {
+    isProcessingSms = false;
+    currentSmsOrderId = null;
+    Logger.info(`[LOCK] SMS lock released for ${orderId}`);
+
+    try {
+      const rec = await registry.getSmsConfirmation(orderId);
+      const incompleteStatuses: SmsStatus[] = ['WAITING_FOR_USER_ACTION', 'SMS_SENT'];
+      if (rec && incompleteStatuses.includes(rec.status)) {
+        await registry.updateSmsStatus(orderId, 'SMS_TIMEOUT');
+        Logger.warn(`[SMS] Auto-updated status to SMS_TIMEOUT for ${orderId}`);
+      }
+    } catch (e) {
+      Logger.error(`[SMS] Failed to auto-update status in finally: ${e}`);
+    }
+  }
+}
 
 async function startKeepAliveServer(): Promise<void> {
   const app: Express = express();
@@ -93,61 +137,93 @@ async function processOrders(): Promise<void> {
 
     let processedCount = 0;
     let smsCount = 0;
+    const finalSmsStatuses: SmsStatus[] = [
+      'SMS_CONFIRMED',
+      'USER_REFUSED_SMS',
+      'SMS_BLOCKED',
+      'COMPLETED_EXTERNALLY',
+    ];
 
     for (const order of orders) {
       try {
         Logger.debug(`[DEBUG] Processing order ${order.external_id} with status: ${order.status}`);
 
         if (order.status === 'READY_FOR_QR') {
-          const processResult = await registry.checkWithStatus(order.external_id);
-          if (processResult.dbError) {
-            Logger.warn(`Registry unavailable for order ${order.external_id}, skipping to prevent duplicates`);
+          const rec = await registry.checkWithStatus(order.external_id);
+          if (rec.dbError) {
+            Logger.info(`[SKIP] Order ${order.external_id}: reason=DB_ERROR status=READY_FOR_QR`);
             continue;
           }
 
-          if (processResult.status === 'PROCESSING' || processResult.status === 'READY_FOR_QR' || processResult.status === 'COMPLETED') {
-            Logger.debug(`Order ${order.external_id} already processed (${order.status}), skipping`);
+          if (rec.status === 'COMPLETED') {
+            Logger.info(`[SKIP] Order ${order.external_id}: reason=ALREADY_COMPLETED status=READY_FOR_QR`);
             continue;
           }
 
-          if (!processResult.exists) {
-            const reserved = await registry.reserveOrder(order.external_id, order.amount);
-            if (!reserved) {
-              Logger.warn(`Order ${order.external_id} already reserved, skipping`);
-              continue;
-            }
+          const reserved = await registry.reserveOrder(order.external_id, order.amount);
+          if (!reserved) {
+            Logger.info(`[SKIP] Order ${order.external_id}: reason=RESERVE_FAILED status=READY_FOR_QR`);
+            continue;
           }
 
+          Logger.info(`[READY_FOR_QR] Processing order ${order.external_id}`);
           const orderData = await surveillance.prepareOrderData(order.external_id);
           const qrBuffer = await generator.generateQR(order.amount, orderData.installmentPeriod || undefined);
-          await dispatcher.sendQRCode(qrBuffer, order.external_id, order.amount);
-          await registry.updateOrderStatus(order.external_id, 'COMPLETED');
-          processedCount++;
-          continue;
-        }
-
-        const processResult = await registry.shouldProcessOrder(order);
-        if (!processResult.shouldProcess) {
-          if (processResult.reason === 'DB_ERROR') {
-            Logger.warn(`Registry unavailable for order ${order.external_id}, skipping to prevent duplicates`);
-          } else {
-            Logger.debug(`Order ${order.external_id} already processed (${order.status}), skipping`);
+          try {
+            await dispatcher.sendQRCode(qrBuffer, order.external_id, order.amount);
+            await registry.updateOrderStatus(order.external_id, 'COMPLETED');
+            Logger.info(`[COMPLETED] Order ${order.external_id} marked as COMPLETED after QR send`);
+            processedCount++;
+          } catch (error) {
+            Logger.error(`[QR] Failed for ${order.external_id}: ${error}`);
           }
           continue;
         }
 
         if (order.status === 'PENDING') {
-          const requiresSms = await surveillance.checkSmsConfirmationRequired(order.external_id);
-          if (requiresSms) {
-            await dispatcher.performSmsFlow(order.external_id, order.amount);
-            smsCount++;
+          const rec = await registry.checkWithStatus(order.external_id);
+          if (rec.dbError) {
+            Logger.info(`[SKIP] Order ${order.external_id}: reason=DB_ERROR status=PENDING`);
             continue;
           }
 
-          if (processResult.reason === 'NEW') {
-            await registry.register(order.external_id, order.amount, 'PENDING');
+          if (rec.status === 'COMPLETED') {
+            Logger.info(`[SKIP] Order ${order.external_id}: reason=ALREADY_COMPLETED status=PENDING`);
+            continue;
           }
 
+          Logger.info(`[PENDING] Sending confirmation alert for ${order.external_id}`);
+          try {
+            await dispatcher.sendConfirmationAlert(order.external_id, order.amount);
+            await registry.register(order.external_id, order.amount, 'PENDING');
+          } catch (error) {
+            Logger.error(`[PENDING] Failed to send alert for ${order.external_id}: ${error}`);
+            continue;
+          }
+
+          if (isProcessingSms) {
+            Logger.info(`[SMS] Lock active, skipping SMS flow for this cycle (current=${currentSmsOrderId || 'unknown'})`);
+            continue;
+          }
+
+          const smsRec = await registry.getSmsConfirmation(order.external_id);
+          if (smsRec && finalSmsStatuses.includes(smsRec.status)) {
+            Logger.debug(`[SMS] Order ${order.external_id} has final SMS status ${smsRec.status}, skip`);
+            continue;
+          }
+
+          const requiresSms = await surveillance.checkSmsConfirmationRequired(order.external_id);
+          if (requiresSms) {
+            Logger.info(`[SMS] Starting SMS flow for ${order.external_id}`);
+            void processSmsConfirmation(order.external_id, order.amount, {
+              external_id: order.external_id,
+              amount: order.amount,
+            });
+            smsCount++;
+            break;
+          }
+
+          Logger.info(`[SMS] Order ${order.external_id} does not require SMS flow`);
           continue;
         }
       } catch (error) {

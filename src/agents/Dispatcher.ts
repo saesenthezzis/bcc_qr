@@ -650,6 +650,7 @@ export class DispatcherAgent {
   }
 
   async sendQRCode(photoBuffer: Buffer, orderId: string, amount: number): Promise<void> {
+    let successCount = 0;
     const caption = `🧾 ИИН #${orderId}\nСумма: ${amount.toFixed(2)} KZT\n${new Date().toISOString()}`;
 
     for (const { chatId, threadId } of this.allowedChats) {
@@ -662,11 +663,16 @@ export class DispatcherAgent {
           message_thread_id: threadId,
         });
 
+        successCount++;
         const threadInfo = threadId ? ` (thread ${threadId})` : '';
         this.logger.info(`Dispatcher: QR sent to chat_id ${chatId}${threadInfo} for order ${orderId}`);
       } catch (error) {
         await this.handleTelegramError(error, `sendQRCode to ${chatId}`);
+        this.logger.error(`sendQRCode failed for chat ${chatId}: ${error}`);
       }
+    }
+    if (successCount === 0) {
+      throw new Error(`sendQRCode: failed to send to all chats for ${orderId}`);
     }
   }
 
@@ -720,6 +726,7 @@ export class DispatcherAgent {
   }
 
   async sendConfirmationAlert(externalId: string, amount: number): Promise<void> {
+    let successCount = 0;
     const caption = `⚠️ ТРЕБУЕТСЯ ПОДТВЕРЖДЕНИЕ\n\nИИН: ${externalId}\nСумма: ${amount.toFixed(2)} тг\n\n---\nНужно подтвердить заявку в личном кабинете: https://online.bcc.kz/cashier-cabinet/ru\nПосле вашего подтверждения бот автоматически пришлет QR-код в этот чат.\n\nАктуальная инструкция — в закрепленном сообщении.\n\nНАПОМИНАНИЕ: все неподтвержденные заявки автоматически аннулируются.`;
 
     for (const { chatId, threadId } of this.allowedChats) {
@@ -727,11 +734,16 @@ export class DispatcherAgent {
         await this.bot.telegram.sendMessage(chatId, caption, {
           message_thread_id: threadId,
         });
+        successCount++;
         const threadInfo = threadId ? ` (thread ${threadId})` : '';
         this.logger.info(`Dispatcher: Confirmation alert sent to chat_id ${chatId}${threadInfo} for order ${externalId}`);
       } catch (sendError) {
         await this.handleTelegramError(sendError, `sendConfirmationAlert to ${chatId}`);
+        this.logger.error(`sendConfirmationAlert failed for chat ${chatId}: ${sendError}`);
       }
+    }
+    if (successCount === 0) {
+      throw new Error(`sendConfirmationAlert: failed to send to all chats for ${externalId}`);
     }
   }
 

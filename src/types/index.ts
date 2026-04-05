@@ -1,12 +1,14 @@
 export type OrderStatus = 'READY_FOR_QR' | 'PENDING';
 export type ProcessStatus = 'PENDING' | 'PROCESSING' | 'READY_FOR_QR' | 'COMPLETED';
-export type SmsStatus = 
-  | 'WAITING_FOR_USER_ACTION'  // Ждет решения админа
-  | 'SMS_SENT'                 // СМС отправлен
-  | 'SMS_BLOCKED'              // Заблокирован банком
-  | 'USER_REFUSED_SMS'         // Админ отказался
-  | 'SMS_TIMEOUT'              // Истек таймаут 5 мин
-  | 'COMPLETED';               // Успешно завершено
+export type SmsStatus =
+  | 'WAITING_FOR_USER_ACTION'
+  | 'SMS_SENT'
+  | 'SMS_CONFIRMED'
+  | 'SMS_BLOCKED'
+  | 'USER_REFUSED_SMS'
+  | 'IGNORED'
+  | 'SMS_TIMEOUT'
+  | 'COMPLETED_EXTERNALLY';
 
 export interface Order {
   external_id: string;
@@ -32,6 +34,8 @@ export interface SmsConfirmation {
   telegram_message_id?: string;
   created_at: string;
   updated_at: string;
+  locked_at?: string;
+  locked_by?: string;
 }
 
 export interface Config {
@@ -42,4 +46,14 @@ export interface Config {
   telegramChatIds: string[];
   supabaseUrl: string;
   supabaseKey: string;
+}
+
+export interface OrderData {
+  installmentPeriod: string | null;
+}
+
+export interface OrderAttributes {
+  external_id: string;
+  iin?: string;
+  amount: number;
 }

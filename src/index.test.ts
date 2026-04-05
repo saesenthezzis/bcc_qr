@@ -12,6 +12,8 @@ config({ path: path.join(process.cwd(), '.env.test') });
 
 Logger.info('=== TEST MODE: Production-like flow with Installment Mapping ===');
 
+const runtimeLogger = new Logger();
+
 const requiredEnvVars = ['BANK_URL', 'BANK_LOGIN', 'BANK_PASSWORD', 'SUPABASE_URL', 'SUPABASE_KEY', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_IDS'];
 for (const envVar of requiredEnvVars) {
   if (!process.env[envVar]) {
@@ -20,17 +22,19 @@ for (const envVar of requiredEnvVars) {
   }
 }
 
-const registry = new RegistryAgent(process.env.SUPABASE_URL!, process.env.SUPABASE_KEY!);
+const registry = new RegistryAgent(process.env.SUPABASE_URL!, process.env.SUPABASE_KEY!, runtimeLogger);
 const surveillance = new SurveillanceAgent(
   process.env.BANK_URL!,
   process.env.BANK_LOGIN!,
   process.env.BANK_PASSWORD!,
+  runtimeLogger,
   registry
 );
-const generator = new GeneratorAgent();
+const generator = new GeneratorAgent(runtimeLogger);
 const dispatcher = new DispatcherAgent(
   process.env.TELEGRAM_BOT_TOKEN!,
   process.env.TELEGRAM_CHAT_IDS!.split(','),
+  runtimeLogger,
   process.env.TELEGRAM_ADMIN_ID,
   surveillance
 );

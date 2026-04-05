@@ -7,6 +7,11 @@ export class GeneratorAgent {
   private static readonly ACCOUNT = '210140004940';
   private static readonly BANK_CODE = 'KZ10609';
   private static readonly DEFAULT_BCC_CODE = 'KZ284'; // Default fallback
+  private readonly logger: Logger;
+
+  constructor(logger: Logger) {
+    this.logger = logger;
+  }
 
   private buildProtocolString(amount: number, bccCode: string): string {
     const formattedAmount = amount.toFixed(2);
@@ -23,14 +28,14 @@ export class GeneratorAgent {
         if (mappedCode !== 'UNKNOWN') {
           bccCode = mappedCode;
         } else {
-          Logger.warn(`Generator: Using default BCC code ${GeneratorAgent.DEFAULT_BCC_CODE} for unknown period: ${installmentPeriod}`);
+          this.logger.warn(`Generator: Using default BCC code ${GeneratorAgent.DEFAULT_BCC_CODE} for unknown period: ${installmentPeriod}`);
         }
       } else {
-        Logger.info(`Generator: No installment period provided, using default BCC code: ${GeneratorAgent.DEFAULT_BCC_CODE}`);
+        this.logger.info(`Generator: No installment period provided, using default BCC code: ${GeneratorAgent.DEFAULT_BCC_CODE}`);
       }
 
       const protocolString = this.buildProtocolString(amount, bccCode);
-      Logger.info(`Generator: Protocol string: ${protocolString}`);
+      this.logger.info(`Generator: Protocol string: ${protocolString}`);
 
       const qrBuffer = await QRCode.toBuffer(protocolString, {
         width: 400,
@@ -41,10 +46,10 @@ export class GeneratorAgent {
         },
       });
 
-      Logger.info('Generator: QR code generated successfully');
+      this.logger.info('Generator: QR code generated successfully');
       return qrBuffer;
     } catch (error) {
-      Logger.error(`Generator: Failed to generate QR - ${error}`);
+      this.logger.error(`Generator: Failed to generate QR - ${error}`);
       throw error;
     }
   }
@@ -57,7 +62,7 @@ export class GeneratorAgent {
     const filePath = path.join(process.cwd(), 'storage', `qr_${orderId}.png`);
 
     fs.writeFileSync(filePath, buffer);
-    Logger.info(`Generator: QR saved to ${filePath}`);
+    this.logger.info(`Generator: QR saved to ${filePath}`);
 
     return filePath;
   }

@@ -4,6 +4,22 @@ export class Logger {
     return `[${timestamp}] [${level}] ${message}`;
   }
 
+  info(message: string): void {
+    Logger.info(message);
+  }
+
+  warn(message: string): void {
+    Logger.warn(message);
+  }
+
+  error(message: string): void {
+    Logger.error(message);
+  }
+
+  debug(message: string): void {
+    Logger.debug(message);
+  }
+
   static info(message: string): void {
     console.log(this.formatMessage('INFO', message));
   }

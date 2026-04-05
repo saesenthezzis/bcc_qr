@@ -23,9 +23,10 @@ architecture.md
 tasks.md
 SMS_PROCESS.md
 *.md
-
+*.sql
 # Project context snapshot (local only)
 project_context.md
+project_context_by_qwen_code.md
 
 # IDE
 .vscode/

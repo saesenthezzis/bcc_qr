@@ -101,6 +101,7 @@ export class RegistryAgent {
       }
 
       if (!result.exists) {
+        Logger.debug(`Registry decision for ${order.external_id}: NEW (bank_status=${order.status}, db_status=NONE)`);
         return { shouldProcess: true, reason: 'NEW' };
       }
 
@@ -110,13 +111,20 @@ export class RegistryAgent {
       }
 
       if (result.status === 'PENDING' && order.status === 'READY_FOR_QR') {
+        Logger.info(`Registry decision for ${order.external_id}: STATUS_CHANGED (db_status=PENDING -> bank_status=READY_FOR_QR)`);
         return { shouldProcess: true, reason: 'STATUS_CHANGED', currentStatus: result.status ?? undefined };
       }
 
       if (result.status === order.status || result.status === 'READY_FOR_QR' || result.status === 'COMPLETED') {
+        Logger.debug(
+          `Registry decision for ${order.external_id}: ALREADY_PROCESSED (bank_status=${order.status}, db_status=${result.status})`
+        );
         return { shouldProcess: false, reason: 'ALREADY_PROCESSED', currentStatus: result.status ?? undefined };
       }
 
+      Logger.debug(
+        `Registry decision for ${order.external_id}: ALREADY_PROCESSED_FALLBACK (bank_status=${order.status}, db_status=${result.status})`
+      );
       return { shouldProcess: false, reason: 'ALREADY_PROCESSED', currentStatus: result.status ?? undefined };
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);

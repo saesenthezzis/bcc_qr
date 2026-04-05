@@ -242,7 +242,9 @@ async function processOrders(): Promise<void> {
           if (processResult.reason === 'DB_ERROR') {
             Logger.warn(`Registry unavailable for order ${order.external_id}, skipping to prevent duplicates`);
           } else {
-            Logger.debug(`Order ${order.external_id} already processed (${order.status}), skipping`);
+            Logger.debug(
+              `Order ${order.external_id} skipped: bank_status=${order.status}, db_status=${processResult.currentStatus ?? 'NONE'}, reason=${processResult.reason}`
+            );
           }
           continue;
         }

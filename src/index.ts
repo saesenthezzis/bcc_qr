@@ -65,14 +65,21 @@ let isMonitoringPaused: boolean = false;
 let isProcessingSms: boolean = false;
 let currentSmsOrderId: string | null = null;
 
+surveillance.setPauseCallback((paused: boolean) => {
+  isMonitoringPaused = paused;
+  Logger.info(`[CYCLE] Monitoring ${paused ? 'paused' : 'resumed'}`);
+});
+
 async function processSmsConfirmation(
   orderId: string,
   amount: number,
   order: { external_id: string; amount: number }
 ): Promise<void> {
   isProcessingSms = true;
+  isMonitoringPaused = true;
   currentSmsOrderId = orderId;
   Logger.info(`[LOCK] SMS lock acquired for ${orderId}`);
+  Logger.info(`[CYCLE] Monitoring paused for SMS flow of ${orderId}`);
 
   try {
     const result = await dispatcher.performSmsFlow(orderId, amount);
@@ -89,8 +96,10 @@ async function processSmsConfirmation(
     Logger.error(`[SMS] Failed to process SMS confirmation for ${order.external_id}: ${error}`);
   } finally {
     isProcessingSms = false;
+    isMonitoringPaused = false;
     currentSmsOrderId = null;
     Logger.info(`[LOCK] SMS lock released for ${orderId}`);
+    Logger.info(`[CYCLE] Monitoring resumed after SMS flow of ${orderId}`);
 
     try {
       const rec = await registry.getSmsConfirmation(orderId);
@@ -192,13 +201,18 @@ async function processOrders(): Promise<void> {
             continue;
           }
 
-          Logger.info(`[PENDING] Sending confirmation alert for ${order.external_id}`);
-          try {
-            await dispatcher.sendConfirmationAlert(order.external_id, order.amount);
-            await registry.register(order.external_id, order.amount, 'PENDING');
-          } catch (error) {
-            Logger.error(`[PENDING] Failed to send alert for ${order.external_id}: ${error}`);
-            continue;
+          const isFirstPendingAlert = !rec.exists || rec.status !== 'PENDING';
+          if (isFirstPendingAlert) {
+            Logger.info(`[PENDING] Sending confirmation alert for ${order.external_id}`);
+            try {
+              await dispatcher.sendConfirmationAlert(order.external_id, order.amount);
+              await registry.register(order.external_id, order.amount, 'PENDING');
+            } catch (error) {
+              Logger.error(`[PENDING] Failed to send alert for ${order.external_id}: ${error}`);
+              continue;
+            }
+          } else {
+            Logger.info(`[PENDING] Confirmation alert already sent for ${order.external_id}, skipping duplicate alert`);
           }
 
           if (isProcessingSms) {

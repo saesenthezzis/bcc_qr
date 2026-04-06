@@ -8,10 +8,59 @@ export class RegistryAgent {
   private client: SupabaseClient;
   private readonly SESSION_ID = 'bcc_bank_session';
   private readonly logger: Logger;
+  private fallbackSmsLocks: Map<string, string> = new Map();
 
   constructor(supabaseUrl: string, supabaseKey: string, logger: Logger) {
     this.client = createClient(supabaseUrl, supabaseKey);
     this.logger = logger;
+  }
+
+  private isMissingSmsLockColumnError(error: { message?: string } | null | undefined): boolean {
+    const message = error?.message || '';
+    return message.includes('sms_lock_acquired_at') || message.includes('sms_lock_order_id');
+  }
+
+  private acquireFallbackSmsLock(orderId: string, now: Date, ttlMs: number): boolean {
+    const existingLockAt = this.fallbackSmsLocks.get(orderId);
+    if (existingLockAt) {
+      const lockAge = now.getTime() - new Date(existingLockAt).getTime();
+      if (lockAge < ttlMs) {
+        this.logger.debug(`[LOCK] In-memory fallback lock is still active for ${orderId}`);
+        return false;
+      }
+    }
+
+    this.fallbackSmsLocks.set(orderId, now.toISOString());
+    this.logger.warn(`[LOCK] Using in-memory SMS lock fallback for ${orderId}`);
+    return true;
+  }
+
+  private releaseFallbackSmsLock(orderId: string): void {
+    this.fallbackSmsLocks.delete(orderId);
+  }
+
+  private getFallbackSmsLockStatus(ttlMs: number): { isLocked: boolean; orderId: string | null } {
+    const now = Date.now();
+    let latestOrderId: string | null = null;
+    let latestTimestamp = 0;
+
+    for (const [orderId, lockAt] of this.fallbackSmsLocks.entries()) {
+      const lockTimestamp = new Date(lockAt).getTime();
+      if (Number.isNaN(lockTimestamp) || now - lockTimestamp >= ttlMs) {
+        this.fallbackSmsLocks.delete(orderId);
+        continue;
+      }
+
+      if (lockTimestamp > latestTimestamp) {
+        latestTimestamp = lockTimestamp;
+        latestOrderId = orderId;
+      }
+    }
+
+    return {
+      isLocked: latestOrderId !== null,
+      orderId: latestOrderId,
+    };
   }
 
   async checkWithStatus(externalId: string): Promise<{ exists: boolean; status: ProcessStatus | null; dbError: boolean }> {
@@ -493,6 +542,9 @@ export class RegistryAgent {
         .eq('external_id', orderId);
       
       if (selectError) {
+        if (this.isMissingSmsLockColumnError(selectError)) {
+          return this.acquireFallbackSmsLock(orderId, now, TEN_MINUTES_MS);
+        }
         this.logger.error(`[LOCK] Failed to check existing lock for ${orderId}: ${selectError.message}`);
         return false;
       }
@@ -530,6 +582,9 @@ export class RegistryAgent {
           });
         
         if (insertError) {
+          if (this.isMissingSmsLockColumnError(insertError)) {
+            return this.acquireFallbackSmsLock(orderId, now, TEN_MINUTES_MS);
+          }
           this.logger.error(`[LOCK] Failed to create SMS confirmation with lock for ${orderId}: ${insertError.message}`);
           return false;
         }
@@ -544,6 +599,9 @@ export class RegistryAgent {
           .eq('external_id', orderId);
         
         if (updateError) {
+          if (this.isMissingSmsLockColumnError(updateError)) {
+            return this.acquireFallbackSmsLock(orderId, now, TEN_MINUTES_MS);
+          }
           this.logger.error(`[LOCK] Failed to acquire lock for ${orderId}: ${updateError.message}`);
           return false;
         }
@@ -569,8 +627,14 @@ export class RegistryAgent {
         .eq('external_id', orderId);
       
       if (error) {
+        if (this.isMissingSmsLockColumnError(error)) {
+          this.releaseFallbackSmsLock(orderId);
+          this.logger.warn(`[LOCK] Released in-memory SMS lock fallback for ${orderId}`);
+          return;
+        }
         this.logger.error(`[LOCK] Failed to release lock for ${orderId}: ${error.message}`);
       } else {
+        this.releaseFallbackSmsLock(orderId);
         this.logger.info(`[LOCK] Successfully released lock for ${orderId}`);
       }
     } catch (error) {
@@ -590,6 +654,10 @@ export class RegistryAgent {
       .order('sms_lock_acquired_at', { ascending: false })
       .limit(1)
       .single();
+
+    if (error && this.isMissingSmsLockColumnError(error)) {
+      return this.getFallbackSmsLockStatus(TEN_MINUTES_MS);
+    }
 
     if (error && error.code !== 'PGRST116') { // PGRST116 is "No rows found"
       this.logger.error(`Registry: Error fetching SMS lock status: ${error.message}`);

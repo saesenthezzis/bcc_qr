@@ -859,9 +859,13 @@ export class SurveillanceAgent extends EventEmitter {
           // Click to open sidebar
           this.logger.info(`[INFO] Clicking on order ${orderId} to open sidebar...`);
           await row.click();
-          await this.page.waitForTimeout(1500);
+          await this.page.waitForSelector('div.bcc-fridge_open', {
+            state: 'visible',
+            timeout: 10000
+          });
+          this.logger.info(`[INFO] Sidebar opened for order ${orderId}`);
 
-          // Wait for sidebar to be fully visible
+          // Only after the sidebar is open do we wait for content to appear.
           try {
             await this.page.waitForSelector('div.bcc-fridge_content', { 
               state: 'visible', 
@@ -872,9 +876,8 @@ export class SurveillanceAgent extends EventEmitter {
             this.logger.warn(`[INFO] Sidebar content not detected, continuing anyway...`);
           }
 
-          // Additional wait for animations
+          // Allow footer actions to render after the panel opens.
           await this.page.waitForTimeout(1500);
-          this.logger.info(`[INFO] Sidebar opened for order ${orderId}`);
 
           // Try multiple selectors with retry logic
           const smsButtonSelectors = [
@@ -938,10 +941,13 @@ export class SurveillanceAgent extends EventEmitter {
             }
           }
 
-          // Close sidebar
-          this.logger.info(`[INFO] Closing sidebar for order ${orderId}`);
-          await this.page.keyboard.press('Escape');
-          await this.page.waitForTimeout(500);
+          if (!hasSmsButton) {
+            this.logger.info(`[INFO] Closing sidebar for order ${orderId}`);
+            await this.page.keyboard.press('Escape');
+            await this.page.waitForTimeout(500);
+          } else {
+            this.logger.info(`[INFO] Keeping sidebar open for order ${orderId} to continue SMS flow`);
+          }
 
           return hasSmsButton;
         }

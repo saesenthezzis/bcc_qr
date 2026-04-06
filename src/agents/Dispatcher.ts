@@ -20,6 +20,7 @@ export class DispatcherAgent {
   private bot: Telegraf<Context>;
   private allowedChats: ChatWithThread[];
   private adminChatId: number | null;
+  private silentMode: boolean = true;
   private readonly logger: Logger;
   private surveillanceAgent: SurveillanceAgent | null = null;
   private isWaitingForSms: boolean = false;
@@ -54,6 +55,50 @@ export class DispatcherAgent {
 
   private isAdmin(chatId: number): boolean {
     return this.adminChatId === chatId;
+  }
+
+  private getNotificationChats(): ChatWithThread[] {
+    if (this.silentMode && this.adminChatId !== null) {
+      return [{ chatId: this.adminChatId }];
+    }
+
+    return this.allowedChats;
+  }
+
+  private getDeliveryModeLabel(): string {
+    return this.silentMode ? 'silent' : 'voice';
+  }
+
+  private getHelpText(): string {
+    return `Commands:\n\n` +
+      `/reload - release stuck lock\n` +
+      `/skip - skip current order\n` +
+      `/again - repeat current order\n` +
+      `/pause - pause monitoring\n` +
+      `/resume - resume monitoring\n` +
+      `/silent - redirect notifications to TELEGRAM_ADMIN_ID\n` +
+      `/voice - send notifications to TELEGRAM_CHAT_IDS\n` +
+      `/pending - show pending orders\n` +
+      `/order [iin] - show order status\n` +
+      `/clear - clear stale records\n` +
+      `/status - show bot status\n` +
+      `/help - this help`;
+  }
+
+  private async setSilentMode(enabled: boolean, ctx: any): Promise<void> {
+    if (!this.isAdmin(ctx.chat.id)) {
+      await ctx.reply('Only TELEGRAM_ADMIN_ID can change silent mode.');
+      return;
+    }
+
+    this.silentMode = enabled;
+    const mode = this.getDeliveryModeLabel();
+    this.logger.info(`Dispatcher: Delivery mode changed to ${mode} by ${ctx.chat.id}`);
+    await ctx.reply(
+      enabled
+        ? 'Silent mode enabled. All notifications are redirected to TELEGRAM_ADMIN_ID.'
+        : 'Voice mode enabled. Notifications are sent to TELEGRAM_CHAT_IDS.'
+    );
   }
 
   private async handleTelegramError(error: any, context: string): Promise<void> {
@@ -139,6 +184,7 @@ export class DispatcherAgent {
       
       const isCommand = [
         'reload','skip','again','pause','resume',
+        'silent','voice',
         'pending','order','clear','status','help','справка',
         'start'
       ].includes(cmd);
@@ -234,6 +280,24 @@ export class DispatcherAgent {
         pauseCallback(false);
         await ctx.reply('▶️ Мониторинг возобновлён.');
       }
+    });
+
+    this.bot.command('silent', async (ctx) => {
+      const chatId = ctx.chat?.id.toString();
+      if (!this.isAuthorized(chatId)) {
+        await ctx.reply('вќЊ Unauthorized');
+        return;
+      }
+      await this.setSilentMode(true, ctx);
+    });
+
+    this.bot.command('voice', async (ctx) => {
+      const chatId = ctx.chat?.id.toString();
+      if (!this.isAuthorized(chatId)) {
+        await ctx.reply('вќЊ Unauthorized');
+        return;
+      }
+      await this.setSilentMode(false, ctx);
     });
 
     this.bot.command('pending', async (ctx) => {
@@ -383,6 +447,7 @@ export class DispatcherAgent {
         await ctx.reply(`📊 Статус бота:\n` +
           `🔒 Лок: ${status.isProcessingSms ? 'да' : 'нет'}\n` +
           `📋 Активный заказ: ${status.currentSmsOrderId || '-'}\n` +
+          `Mode: ${this.getDeliveryModeLabel()}\n` +
           `⏸️ Мониторинг: ${status.isMonitoringPaused ? 'на паузе' : 'активен'}\n` +
           `⏰ Время: ${timestamp}`);
       }
@@ -487,6 +552,12 @@ export class DispatcherAgent {
         } else {
           await ctx.reply('❌ Ошибка: агент наблюдения не инициализирован.');
         }
+        break;
+      case 'silent':
+        await this.setSilentMode(true, ctx);
+        break;
+      case 'voice':
+        await this.setSilentMode(false, ctx);
         break;
       case 'pending': // Show pending orders
         try {
@@ -612,6 +683,7 @@ export class DispatcherAgent {
             await ctx.reply(`📊 Статус бота:\n` +
               `🔒 Лок: ${status.isProcessingSms ? 'да' : 'нет'}\n` +
               `📋 Активный заказ: ${status.currentSmsOrderId || '-'}\n` +
+              `Mode: ${this.getDeliveryModeLabel()}\n` +
               `⏸️ Мониторинг: ${status.isMonitoringPaused ? 'на паузе' : 'активен'}\n` +
               `⏰ Время: ${timestamp}`);
           } catch (error) {
@@ -653,7 +725,7 @@ export class DispatcherAgent {
     let successCount = 0;
     const caption = `🧾 ИИН #${orderId}\nСумма: ${amount.toFixed(2)} KZT\n${new Date().toISOString()}`;
 
-    for (const { chatId, threadId } of this.allowedChats) {
+    for (const { chatId, threadId } of this.getNotificationChats()) {
       try {
         await this.bot.telegram.sendPhoto(chatId, {
           source: photoBuffer,
@@ -729,7 +801,7 @@ export class DispatcherAgent {
     let successCount = 0;
     const caption = `⚠️ ТРЕБУЕТСЯ ПОДТВЕРЖДЕНИЕ\n\nИИН: ${externalId}\nСумма: ${amount.toFixed(2)} тг\n\n---\nНужно подтвердить заявку в личном кабинете: https://online.bcc.kz/cashier-cabinet/ru\nПосле вашего подтверждения бот автоматически пришлет QR-код в этот чат.\n\nАктуальная инструкция — в закрепленном сообщении.\n\nНАПОМИНАНИЕ: все неподтвержденные заявки автоматически аннулируются.`;
 
-    for (const { chatId, threadId } of this.allowedChats) {
+    for (const { chatId, threadId } of this.getNotificationChats()) {
       try {
         await this.bot.telegram.sendMessage(chatId, caption, {
           message_thread_id: threadId,
@@ -775,7 +847,7 @@ export class DispatcherAgent {
 
     let messageId: string | null = null;
 
-    for (const { chatId, threadId } of this.allowedChats) {
+    for (const { chatId, threadId } of this.getNotificationChats()) {
       try {
         const message = await this.bot.telegram.sendMessage(chatId, caption, {
           message_thread_id: threadId,
@@ -838,7 +910,7 @@ export class DispatcherAgent {
 
     let messageId: string | null = null;
 
-    for (const { chatId, threadId } of this.allowedChats) {
+    for (const { chatId, threadId } of this.getNotificationChats()) {
       try {
         const message = await this.bot.telegram.sendPhoto(chatId, {
           source: screenshot,
@@ -941,7 +1013,7 @@ export class DispatcherAgent {
   async sendSmsLimitExceeded(orderId: string, attempts: number): Promise<void> {
     const caption = `⛔ ПРЕВЫШЕН ЛИМИТ ПОПЫТОК\n\nИИН: ${orderId}\nПопыток: ${attempts}\n\n❌ Достигнут максимальный лимит попыток отправки СМС (${process.env.SMS_MAX_ATTEMPTS || 3}).\n\nЗаявка требует ручной обработки.`;
 
-    for (const { chatId, threadId } of this.allowedChats) {
+    for (const { chatId, threadId } of this.getNotificationChats()) {
       try {
         await this.bot.telegram.sendMessage(chatId, caption, {
           message_thread_id: threadId,
@@ -1052,7 +1124,7 @@ export class DispatcherAgent {
           return;
         }
 
-        for (const { chatId } of this.allowedChats) {
+        for (const { chatId } of this.getNotificationChats()) {
           try {
             await this.bot.telegram.editMessageText(
               chatId,
@@ -1207,6 +1279,22 @@ export class DispatcherAgent {
           return;
         }
 
+        const smsButtonClicked = await this.retryOperation(async () => {
+          if (!this.surveillanceAgent) {
+            throw new Error('Surveillance agent not available');
+          }
+          return await this.surveillanceAgent.clickSendSmsButton(orderId);
+        });
+
+        if (!smsButtonClicked) {
+          this.logger.error(`Failed to click Send SMS button for ${orderId} after user confirmation`);
+          await finalizeFlow(SmsFlowStatus.TIMEOUT, {
+            smsStatus: 'SMS_TIMEOUT',
+          });
+          return;
+        }
+
+        this.logger.info(`Dispatcher: Send SMS button clicked for ${orderId}, waiting for SMS code from user`);
         await syncSmsStatus('SMS_SENT', true);
         
         // Step 2: Decision confirmed, now wait for SMS code
@@ -1319,7 +1407,7 @@ export class DispatcherAgent {
   }
 
   async updateCountdownMessage(orderId: string, messageId: string, countdownText: string): Promise<void> {
-    for (const { chatId, threadId } of this.allowedChats) {
+    for (const { chatId, threadId } of this.getNotificationChats()) {
       try {
         await this.bot.telegram.editMessageCaption(
           chatId,
@@ -1341,7 +1429,7 @@ export class DispatcherAgent {
   }
 
   async updateDecisionCountdown(orderId: string, messageId: string, countdownText: string): Promise<void> {
-    for (const { chatId, threadId } of this.allowedChats) {
+    for (const { chatId, threadId } of this.getNotificationChats()) {
       try {
         await this.bot.telegram.editMessageText(
           chatId,
@@ -1375,7 +1463,7 @@ export class DispatcherAgent {
   async sendTimeoutAlert(orderId: string, amount?: number): Promise<void> {
     const caption = `⏱️ ТАЙМАУТ СМС-КОДА\n\nИИН: ${orderId}\nСумма: ${amount?.toFixed(2) || 'N/A'} тг\n\n❌ Истекло время ожидания СМС-кода (5 минут).\n\nЗаявка требует повторной обработки.`;
 
-    for (const { chatId, threadId } of this.allowedChats) {
+    for (const { chatId, threadId } of this.getNotificationChats()) {
       try {
         await this.bot.telegram.sendMessage(chatId, caption, {
           message_thread_id: threadId,

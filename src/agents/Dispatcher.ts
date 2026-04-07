@@ -168,7 +168,7 @@ export class DispatcherAgent {
       }
     });
 
-    this.bot.on('text', async (ctx) => {
+    this.bot.on('text', async (ctx, next) => {
       const chatId = ctx.chat.id;
       const text = ctx.message.text.trim();
       
@@ -195,9 +195,13 @@ export class DispatcherAgent {
             this.surveillanceAgent.submitSmsCode(text);
             this.isWaitingForSms = false;
             await ctx.reply('✅ СМС-код принят и введён в систему.');
+            return;
           }
         }
       }
+
+      // Пропускаем сообщение дальше по цепочке, чтобы срабатывали bot.command()
+      return next();
     });
 
     // Register slash commands for Telegram menu

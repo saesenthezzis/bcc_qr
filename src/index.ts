@@ -57,6 +57,13 @@ surveillance.on('smsRequired', async ({ screenshot, timestamp }) => {
   await dispatcher.sendSmsRequest(screenshot, timestamp);
 });
 
+surveillance.on('smsButtonNotFound', async ({ orderId, screenshotPath }) => {
+  Logger.warn(`[SMS] SMS button not found for ${orderId}, sending screenshot to Telegram`);
+  const fs = await import('fs');
+  const buffer = fs.readFileSync(screenshotPath);
+  await dispatcher.sendSmsBlockedAlert(orderId, buffer);
+});
+
 const CHECK_INTERVAL_MS = (parseInt(process.env.CHECK_INTERVAL_MINUTES || '1') * 60 * 1000);
 const GRACEFUL_RESTART_HOURS = 3;
 

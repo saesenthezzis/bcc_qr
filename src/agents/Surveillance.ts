@@ -936,6 +936,7 @@ export class SurveillanceAgent extends EventEmitter {
                 fullPage: false,
               });
               this.logger.info(`[DEBUG] Screenshot saved to ${screenshotPath} for debugging`);
+              this.emit('smsButtonNotFound', { orderId, screenshotPath });
             } catch (screenshotError) {
               this.logger.warn(`[DEBUG] Failed to save debug screenshot: ${screenshotError}`);
             }

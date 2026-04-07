@@ -12,7 +12,16 @@ export interface ChatWithThread {
 
 export interface SmsCodeReplyContext {
   orderId: string;
+  chatId: number;
   messageId: number;
+  threadId?: number;
+  timestamp: number;
+}
+
+interface TelegramMessageRef {
+  chatId: number;
+  messageId: number;
+  threadId?: number;
   timestamp: number;
 }
 
@@ -26,6 +35,11 @@ export class DispatcherAgent {
   private isWaitingForSms: boolean = false;
   private smsCodeReplyContexts: Map<string, SmsCodeReplyContext> = new Map();
   private smsCodeCallbacks: Map<string, (code: string) => void> = new Map();
+  private decisionMessageRefs: Map<string, Map<number, TelegramMessageRef>> = new Map();
+  private codeMessageRefs: Map<string, Map<number, TelegramMessageRef>> = new Map();
+  private decisionIntervals: Map<string, NodeJS.Timeout> = new Map();
+  private codeIntervals: Map<string, NodeJS.Timeout> = new Map();
+  private readonly MESSAGE_REF_TTL_MS = 24 * 60 * 60 * 1000;
   private setSkipCallback: ((callback: () => Promise<string | null>) => void) | null = null;
   private setPauseCallback: ((callback: (paused: boolean) => void) => void) | null = null;
 
@@ -198,9 +212,9 @@ export class DispatcherAgent {
       const replyToMessage = ctx.message.reply_to_message;
       if (replyToMessage) {
         const replyMessageId = replyToMessage.message_id;
-        for (const [orderId, context] of this.smsCodeReplyContexts.entries()) {
-          if (context.messageId === replyMessageId) {
-            await this.handleSmsCodeReply(orderId, text, ctx);
+        for (const [, context] of this.smsCodeReplyContexts.entries()) {
+          if (context.chatId === chatId && context.messageId === replyMessageId) {
+            await this.handleSmsCodeReply(context.orderId, text, ctx);
             return;
           }
         }
@@ -842,10 +856,11 @@ export class DispatcherAgent {
 
   // SMS Confirmation Methods
 
-  async sendSmsConfirmationRequest(orderId: string, amount: number): Promise<string | null> {
+  async sendSmsConfirmationRequest(orderId: string, amount: number): Promise<boolean> {
     const caption = `📲 Отправить код подтверждения клиенту?\n\nИИН: ${orderId}\nСумма: ${amount.toFixed(2)} тг\n\n⚠️ Нажмите кнопку ниже, чтобы отправить СМС-код клиенту для подтверждения заявки.\n⚠️ Функция в тестовом режиме, возможны ошибки`;
 
-    let messageId: string | null = null;
+    this.decisionMessageRefs.delete(orderId);
+    let successCount = 0;
 
     for (const { chatId, threadId } of this.getNotificationChats()) {
       try {
@@ -861,9 +876,13 @@ export class DispatcherAgent {
           }
         });
 
-        if (!messageId) {
-          messageId = message.message_id.toString();
-        }
+        this.setMessageRef(this.decisionMessageRefs, orderId, {
+          chatId,
+          messageId: message.message_id,
+          threadId,
+          timestamp: Date.now(),
+        });
+        successCount++;
 
         const threadInfo = threadId ? ` (thread ${threadId})` : '';
         this.logger.info(`Dispatcher: SMS confirmation request sent to chat_id ${chatId}${threadInfo} for order ${orderId}`);
@@ -872,7 +891,7 @@ export class DispatcherAgent {
       }
     }
 
-    return messageId;
+    return successCount > 0;
   }
 
   private async handleSmsConfirmationCallback(orderId: string, ctx: any): Promise<void> {
@@ -899,7 +918,7 @@ export class DispatcherAgent {
     }
   }
 
-  async sendSmsCodeRequest(orderId: string, screenshot: Buffer, isRetry: boolean = false, attemptNumber: number = 1, amount?: number): Promise<string | null> {
+  async sendSmsCodeRequest(orderId: string, screenshot: Buffer, isRetry: boolean = false, attemptNumber: number = 1, amount?: number): Promise<boolean> {
     let caption = '';
     
     if (isRetry) {
@@ -908,7 +927,9 @@ export class DispatcherAgent {
       caption = `📲 ВВЕДИТЕ SMS-КОД\nИИН: ${orderId}\nСумма: ${amount?.toFixed(2) || 'N/A'} тг\n\n📝 Ответьте на это сообщение кодом (только цифры).`;
     }
 
-    let messageId: string | null = null;
+    this.clearReplyContexts(orderId);
+    this.codeMessageRefs.delete(orderId);
+    let successCount = 0;
 
     for (const { chatId, threadId } of this.getNotificationChats()) {
       try {
@@ -921,15 +942,20 @@ export class DispatcherAgent {
         });
 
         // Store context for reply handling
-        this.smsCodeReplyContexts.set(orderId, {
+        this.smsCodeReplyContexts.set(this.getReplyContextKey(orderId, chatId), {
           orderId,
+          chatId,
           messageId: message.message_id,
+          threadId,
           timestamp: Date.now(),
         });
-
-        if (!messageId) {
-          messageId = message.message_id.toString();
-        }
+        this.setMessageRef(this.codeMessageRefs, orderId, {
+          chatId,
+          messageId: message.message_id,
+          threadId,
+          timestamp: Date.now(),
+        });
+        successCount++;
 
         const threadInfo = threadId ? ` (thread ${threadId})` : '';
         this.logger.info(`Dispatcher: SMS code request sent to chat_id ${chatId}${threadInfo} for order ${orderId}`);
@@ -938,7 +964,7 @@ export class DispatcherAgent {
       }
     }
 
-    return messageId;
+    return successCount > 0;
   }
 
   private async handleSmsCodeReply(orderId: string, code: string, ctx: any): Promise<void> {
@@ -959,7 +985,7 @@ export class DispatcherAgent {
         this.logger.info(`Dispatcher: SMS code received for ${orderId}: ${code} from ${username}`);
         
         // Update the original message with confirmation
-        const replyContext = this.smsCodeReplyContexts.get(orderId);
+        const replyContext = this.smsCodeReplyContexts.get(this.getReplyContextKey(orderId, ctx.chat.id));
         if (replyContext) {
           try {
             await this.bot.telegram.editMessageCaption(
@@ -976,7 +1002,7 @@ export class DispatcherAgent {
         await ctx.reply(`✅ СМС-код принят для заявки ${orderId}`);
 
         // Clean up context
-        this.smsCodeReplyContexts.delete(orderId);
+        this.clearReplyContexts(orderId);
         this.smsCodeCallbacks.delete(orderId);
       } else {
         this.logger.warn(`Dispatcher: No callback registered for order ${orderId}`);
@@ -1034,8 +1060,90 @@ export class DispatcherAgent {
 
   unregisterSmsCodeCallback(orderId: string): void {
     this.smsCodeCallbacks.delete(orderId);
-    this.smsCodeReplyContexts.delete(orderId);
+    this.clearReplyContexts(orderId);
     this.logger.info(`Dispatcher: SMS code callback unregistered for ${orderId}`);
+  }
+
+  private getReplyContextKey(orderId: string, chatId: number): string {
+    return `${orderId}:${chatId}`;
+  }
+
+  private pruneStaleMessageRefs(): void {
+    const cutoff = Date.now() - this.MESSAGE_REF_TTL_MS;
+
+    for (const refsByOrder of [this.decisionMessageRefs, this.codeMessageRefs]) {
+      for (const [orderId, refsByChat] of refsByOrder.entries()) {
+        for (const [chatId, ref] of refsByChat.entries()) {
+          if (ref.timestamp < cutoff) {
+            refsByChat.delete(chatId);
+          }
+        }
+
+        if (refsByChat.size === 0) {
+          refsByOrder.delete(orderId);
+        }
+      }
+    }
+
+    for (const [key, context] of this.smsCodeReplyContexts.entries()) {
+      if (context.timestamp < cutoff) {
+        this.smsCodeReplyContexts.delete(key);
+      }
+    }
+  }
+
+  private setMessageRef(
+    store: Map<string, Map<number, TelegramMessageRef>>,
+    orderId: string,
+    ref: TelegramMessageRef
+  ): void {
+    this.pruneStaleMessageRefs();
+
+    const refsByChat = store.get(orderId) ?? new Map<number, TelegramMessageRef>();
+    refsByChat.set(ref.chatId, ref);
+    store.set(orderId, refsByChat);
+  }
+
+  private getMessageRefs(
+    store: Map<string, Map<number, TelegramMessageRef>>,
+    orderId: string
+  ): TelegramMessageRef[] {
+    this.pruneStaleMessageRefs();
+    return Array.from(store.get(orderId)?.values() ?? []);
+  }
+
+  private clearReplyContexts(orderId: string): void {
+    for (const key of this.smsCodeReplyContexts.keys()) {
+      if (key.startsWith(`${orderId}:`)) {
+        this.smsCodeReplyContexts.delete(key);
+      }
+    }
+  }
+
+  private clearMessageRefs(orderId: string): void {
+    this.decisionMessageRefs.delete(orderId);
+    this.codeMessageRefs.delete(orderId);
+  }
+
+  private clearDecisionInterval(orderId: string): void {
+    const interval = this.decisionIntervals.get(orderId);
+    if (interval) {
+      clearInterval(interval);
+      this.decisionIntervals.delete(orderId);
+    }
+  }
+
+  private clearCodeInterval(orderId: string): void {
+    const interval = this.codeIntervals.get(orderId);
+    if (interval) {
+      clearInterval(interval);
+      this.codeIntervals.delete(orderId);
+    }
+  }
+
+  private clearSmsIntervals(orderId: string): void {
+    this.clearDecisionInterval(orderId);
+    this.clearCodeInterval(orderId);
   }
 
   private async handleSmsCancellation(orderId: string, ctx: any): Promise<void> {
@@ -1062,7 +1170,8 @@ export class DispatcherAgent {
 
       // Clean up
       this.smsCodeCallbacks.delete(orderId);
-      this.smsCodeReplyContexts.delete(orderId);
+      this.clearReplyContexts(orderId);
+      this.clearMessageRefs(orderId);
 
       this.logger.info(`Dispatcher: SMS request cancelled for ${orderId}`);
     } catch (error) {
@@ -1082,18 +1191,13 @@ export class DispatcherAgent {
       const registry = surveillanceAgent.getRegistry();
       let decisionTimeout: NodeJS.Timeout | null = null;
       let codeTimeout: NodeJS.Timeout | null = null;
-      let countdownInterval: NodeJS.Timeout | null = null;
-      let decisionCountdownInterval: NodeJS.Timeout | null = null;
-      let decisionMessageId: string | null = null;
-      let codeMessageId: string | null = null;
       let lockAcquired = false;
       let settled = false;
       
       const cleanup = () => {
         if (decisionTimeout) clearTimeout(decisionTimeout);
         if (codeTimeout) clearTimeout(codeTimeout);
-        if (countdownInterval) clearInterval(countdownInterval);
-        if (decisionCountdownInterval) clearInterval(decisionCountdownInterval);
+        this.clearSmsIntervals(orderId);
         this.unregisterSmsCodeCallback(orderId);
       };
 
@@ -1120,15 +1224,16 @@ export class DispatcherAgent {
       };
 
       const expireDecisionMessage = async () => {
-        if (!decisionMessageId) {
+        const decisionRefs = this.getMessageRefs(this.decisionMessageRefs, orderId);
+        if (decisionRefs.length === 0) {
           return;
         }
 
-        for (const { chatId } of this.getNotificationChats()) {
+        for (const ref of decisionRefs) {
           try {
             await this.bot.telegram.editMessageText(
-              chatId,
-              parseInt(decisionMessageId, 10),
+              ref.chatId,
+              ref.messageId,
               undefined,
               'Время ожидания истекло',
               { reply_markup: undefined }
@@ -1137,7 +1242,7 @@ export class DispatcherAgent {
             if (error?.response?.description?.includes('message is not modified')) {
               continue;
             }
-            await this.handleTelegramError(error, `expireDecisionMessage in ${chatId}`);
+            await this.handleTelegramError(error, `expireDecisionMessage in ${ref.chatId}`);
           }
         }
       };
@@ -1168,6 +1273,7 @@ export class DispatcherAgent {
         } catch (error) {
           this.logger.error(`Dispatcher: Failed to finalize SMS flow state for ${orderId} - ${error}`);
         } finally {
+          this.clearMessageRefs(orderId);
           if (registry && lockAcquired) {
             await registry.releaseSmsLock(orderId);
           }
@@ -1177,57 +1283,61 @@ export class DispatcherAgent {
 
       const startDecisionCountdown = (initialSeconds: number) => {
         let secondsLeft = initialSeconds;
-        if (decisionCountdownInterval) clearInterval(decisionCountdownInterval);
+        this.clearDecisionInterval(orderId);
         
-        decisionCountdownInterval = setInterval(async () => {
-          secondsLeft--;
+        const interval = setInterval(async () => {
+          secondsLeft -= 60;
           const minutes = Math.floor(secondsLeft / 60);
           const seconds = secondsLeft % 60;
           const countdownText = `⏱️ Ожидание решения: ${minutes}:${seconds.toString().padStart(2, '0')}`;
           
-          if (decisionMessageId) {
+          if (this.getMessageRefs(this.decisionMessageRefs, orderId).length > 0) {
             try {
-              await this.updateDecisionCountdown(orderId, decisionMessageId, countdownText);
+              await this.updateDecisionCountdown(orderId, countdownText);
             } catch (error) {
               this.logger.warn(`Failed to update decision countdown: ${error}`);
             }
           }
           
           if (secondsLeft <= 0) {
-            clearInterval(decisionCountdownInterval!);
+            this.clearDecisionInterval(orderId);
             void finalizeFlow(SmsFlowStatus.TIMEOUT, {
               smsStatus: 'IGNORED',
               expireDecision: true,
             });
           }
-        }, 1000);
+        }, 60000);
+
+        this.decisionIntervals.set(orderId, interval);
       };
 
       const startCodeCountdown = (initialSeconds: number) => {
         let secondsLeft = initialSeconds;
-        if (countdownInterval) clearInterval(countdownInterval);
+        this.clearCodeInterval(orderId);
         
-        countdownInterval = setInterval(async () => {
-          secondsLeft--;
+        const interval = setInterval(async () => {
+          secondsLeft -= 60;
           const minutes = Math.floor(secondsLeft / 60);
           const seconds = secondsLeft % 60;
           const countdownText = `⏱️ Ожидание СМС-кода: ${minutes}:${seconds.toString().padStart(2, '0')}`;
           
-          if (codeMessageId) {
+          if (this.getMessageRefs(this.codeMessageRefs, orderId).length > 0) {
             try {
-              await this.updateCountdownMessage(orderId, codeMessageId, countdownText);
+              await this.updateCountdownMessage(orderId, countdownText);
             } catch (error) {
               this.logger.warn(`Failed to update code countdown: ${error}`);
             }
           }
           
           if (secondsLeft <= 0) {
-            clearInterval(countdownInterval!);
+            this.clearCodeInterval(orderId);
             void finalizeFlow(SmsFlowStatus.TIMEOUT, {
               smsStatus: 'SMS_TIMEOUT',
             });
           }
-        }, 1000);
+        }, 60000);
+
+        this.codeIntervals.set(orderId, interval);
       };
 
       // Step 1: Send decision request (send SMS or cancel)
@@ -1243,8 +1353,8 @@ export class DispatcherAgent {
           await syncSmsStatus('WAITING_FOR_USER_ACTION');
         }
 
-        decisionMessageId = await this.sendSmsConfirmationRequest(orderId, amount);
-        if (!decisionMessageId) {
+        const decisionRequestSent = await this.sendSmsConfirmationRequest(orderId, amount);
+        if (!decisionRequestSent) {
           this.logger.error(`Failed to send SMS confirmation request for ${orderId}`);
           await finalizeFlow(SmsFlowStatus.TIMEOUT, {
             smsStatus: 'SMS_TIMEOUT',
@@ -1266,7 +1376,7 @@ export class DispatcherAgent {
         const decisionResult = await new Promise<string>((decisionResolve) => {
           this.registerSmsCodeCallback(orderId, (code) => {
             if (decisionTimeout) clearTimeout(decisionTimeout);
-            if (decisionCountdownInterval) clearInterval(decisionCountdownInterval);
+            this.clearDecisionInterval(orderId);
             decisionResolve(code);
           });
         });
@@ -1323,7 +1433,7 @@ export class DispatcherAgent {
               continue;
             }
             
-            codeMessageId = await this.sendSmsCodeRequest(
+            const codeRequestSent = await this.sendSmsCodeRequest(
               orderId, 
               screenshot, 
               attemptNumber > 1, 
@@ -1331,7 +1441,7 @@ export class DispatcherAgent {
               amount
             );
             
-            if (!codeMessageId) {
+            if (!codeRequestSent) {
               this.logger.error(`Failed to send SMS code request for ${orderId}, attempt ${attemptNumber}`);
               if (attemptNumber === maxAttempts) {
                 await finalizeFlow(SmsFlowStatus.TIMEOUT, {
@@ -1356,7 +1466,7 @@ export class DispatcherAgent {
             const smsCode = await new Promise<string>((codeResolve) => {
               this.registerSmsCodeCallback(orderId, (code) => {
                 if (codeTimeout) clearTimeout(codeTimeout);
-                if (countdownInterval) clearInterval(countdownInterval);
+                this.clearCodeInterval(orderId);
                 codeResolve(code);
               });
             });
@@ -1406,34 +1516,34 @@ export class DispatcherAgent {
     });
   }
 
-  async updateCountdownMessage(orderId: string, messageId: string, countdownText: string): Promise<void> {
-    for (const { chatId, threadId } of this.getNotificationChats()) {
+  async updateCountdownMessage(orderId: string, countdownText: string): Promise<void> {
+    for (const ref of this.getMessageRefs(this.codeMessageRefs, orderId)) {
       try {
         await this.bot.telegram.editMessageCaption(
-          chatId,
-          parseInt(messageId, 10),
+          ref.chatId,
+          ref.messageId,
           undefined,
           `🔐 ВВЕДИТЕ СМС-КОД\n\nИИН: ${orderId}\n\n${countdownText}\n\n📝 Ответьте на это сообщение с СМС-кодом (только цифры).`
         );
 
-        const threadInfo = threadId ? ` (thread ${threadId})` : '';
-        this.logger.debug(`Dispatcher: Countdown updated for ${orderId} in chat_id ${chatId}${threadInfo}`);
+        const threadInfo = ref.threadId ? ` (thread ${ref.threadId})` : '';
+        this.logger.debug(`Dispatcher: Countdown updated for ${orderId} in chat_id ${ref.chatId}${threadInfo}`);
       } catch (editError: any) {
         // Ignore "message is not modified" errors
         if (editError?.response?.description?.includes('message is not modified')) {
           continue;
         }
-        await this.handleTelegramError(editError, `updateCountdownMessage to ${chatId}`);
+        await this.handleTelegramError(editError, `updateCountdownMessage to ${ref.chatId}`);
       }
     }
   }
 
-  async updateDecisionCountdown(orderId: string, messageId: string, countdownText: string): Promise<void> {
-    for (const { chatId, threadId } of this.getNotificationChats()) {
+  async updateDecisionCountdown(orderId: string, countdownText: string): Promise<void> {
+    for (const ref of this.getMessageRefs(this.decisionMessageRefs, orderId)) {
       try {
         await this.bot.telegram.editMessageText(
-          chatId,
-          parseInt(messageId, 10),
+          ref.chatId,
+          ref.messageId,
           undefined,
           `📲 ОТПРАВИТЬ СМС КЛИЕНТУ?\n\nИИН: ${orderId}\n\n${countdownText}\n\n⚠️ Нажмите кнопку ниже, чтобы отправить СМС-код клиенту для подтверждения заявки.\n⚠️ Функция в тестовом режиме, возможны ошибки`,
           {
@@ -1448,14 +1558,14 @@ export class DispatcherAgent {
           }
         );
 
-        const threadInfo = threadId ? ` (thread ${threadId})` : '';
-        this.logger.debug(`Dispatcher: Decision countdown updated for ${orderId} in chat_id ${chatId}${threadInfo}`);
+        const threadInfo = ref.threadId ? ` (thread ${ref.threadId})` : '';
+        this.logger.debug(`Dispatcher: Decision countdown updated for ${orderId} in chat_id ${ref.chatId}${threadInfo}`);
       } catch (editError: any) {
         // Ignore "message is not modified" errors
         if (editError?.response?.description?.includes('message is not modified')) {
           continue;
         }
-        await this.handleTelegramError(editError, `updateDecisionCountdown to ${chatId}`);
+        await this.handleTelegramError(editError, `updateDecisionCountdown to ${ref.chatId}`);
       }
     }
   }

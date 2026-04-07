@@ -40,8 +40,6 @@ export class DispatcherAgent {
   private decisionIntervals: Map<string, NodeJS.Timeout> = new Map();
   private codeIntervals: Map<string, NodeJS.Timeout> = new Map();
   private readonly MESSAGE_REF_TTL_MS = 24 * 60 * 60 * 1000;
-  private setSkipCallback: ((callback: () => Promise<string | null>) => void) | null = null;
-  private setPauseCallback: ((callback: (paused: boolean) => void) => void) | null = null;
 
   constructor(botToken: string, chatIds: string[], logger: Logger, adminId?: string, surveillanceAgent?: SurveillanceAgent) {
     this.bot = new Telegraf(botToken);
@@ -139,17 +137,6 @@ export class DispatcherAgent {
 
   private async setupBot(): Promise<void> {
     // Callback functions to be set by external code
-    let skipCallback: (() => Promise<string | null>) | null = null;
-    let pauseCallback: ((paused: boolean) => void) | null = null;
-
-    this.setSkipCallback = (callback) => {
-      skipCallback = callback;
-    };
-
-    this.setPauseCallback = (callback) => {
-      pauseCallback = callback;
-    };
-
     this.bot.start((ctx) => {
       if (this.isAuthorized(ctx.chat.id)) {
         ctx.reply('✅ Авторизовано. Система CreditBridge активна.');
@@ -189,26 +176,7 @@ export class DispatcherAgent {
       
       if (!this.isAuthorized(chatId)) return;
       
-      // 1. СНАЧАЛА команды
-      const cmd = text.toLowerCase()
-        .replace(/^\//, '')     // убрать /
-        .split('@')[0]          // убрать @botname
-        .split(' ')[0];         // взять первое слово
-      const arg = text.split(' ')[1];
-      
-      const isCommand = [
-        'reload','skip','again','pause','resume',
-        'silent','voice',
-        'pending','order','clear','status','help','справка',
-        'start'
-      ].includes(cmd);
-      
-      if (isCommand) {
-        await this.handleCommand(cmd, arg, ctx);
-        return;
-      }
-      
-      // 2. ПОТОМ проверка reply на SMS-код
+      // 1. Проверка reply на SMS-код
       const replyToMessage = ctx.message.reply_to_message;
       if (replyToMessage) {
         const replyMessageId = replyToMessage.message_id;
@@ -220,7 +188,7 @@ export class DispatcherAgent {
         }
       }
       
-      // 3. Старый обработчик SMS для входа (личка админа)
+      // 2. Старый обработчик SMS для входа (личка админа)
       if (this.isWaitingForSms && this.isAdmin(chatId)) {
         if (/^\d{4,8}$/.test(text)) {
           if (this.surveillanceAgent) {
@@ -248,18 +216,25 @@ export class DispatcherAgent {
         await ctx.reply('❌ Unauthorized');
         return;
       }
-      if (skipCallback) {
-        try {
-          const orderId = await skipCallback();
-          if (orderId) {
-            await ctx.reply(`⏭️ Заказ ${orderId} пропущен.\nСтатус обновлён: COMPLETED_EXTERNALLY.\nМониторинг возобновится в следующем цикле.`);
-          } else {
-            await ctx.reply('ℹ️ Нет активного заказа для пропуска.');
+      if (this.surveillanceAgent) {
+        const skipCb = this.surveillanceAgent.getSkipCallback();
+        if (skipCb) {
+          try {
+            const orderId = await skipCb();
+            if (orderId) {
+              await ctx.reply(`⏭️ Заказ ${orderId} пропущен.\nСтатус обновлён: COMPLETED_EXTERNALLY.\nМониторинг возобновится в следующем цикле.`);
+            } else {
+              await ctx.reply('ℹ️ Нет активного заказа для пропуска.');
+            }
+          } catch (error) {
+            this.logger.error(`Error skipping order: ${error}`);
+            await ctx.reply('❌ Ошибка при пропуске заказа.');
           }
-        } catch (error) {
-          this.logger.error(`Error skipping order: ${error}`);
-          await ctx.reply('❌ Ошибка при пропуске заказа.');
+        } else {
+          await ctx.reply('❌ Callback для skip не установлен.');
         }
+      } else {
+        await ctx.reply('❌ Ошибка: агент наблюдения не инициализирован.');
       }
     });
 
@@ -278,9 +253,16 @@ export class DispatcherAgent {
         await ctx.reply('❌ Unauthorized');
         return;
       }
-      if (pauseCallback) {
-        pauseCallback(true);
-        await ctx.reply('⏸️ Мониторинг приостановлен.\nТекущий SMS-флоу завершится штатно.\nДля возобновления: /resume');
+      if (this.surveillanceAgent) {
+        const pauseCb = this.surveillanceAgent.getPauseCallback();
+        if (pauseCb) {
+          pauseCb(true);
+          await ctx.reply('⏸️ Мониторинг приостановлен.\nТекущий SMS-флоу завершится штатно.\nДля возобновления: /resume');
+        } else {
+          await ctx.reply('❌ Callback для pause не установлен.');
+        }
+      } else {
+        await ctx.reply('❌ Ошибка: агент наблюдения не инициализирован.');
       }
     });
 
@@ -290,16 +272,23 @@ export class DispatcherAgent {
         await ctx.reply('❌ Unauthorized');
         return;
       }
-      if (pauseCallback) {
-        pauseCallback(false);
-        await ctx.reply('▶️ Мониторинг возобновлён.');
+      if (this.surveillanceAgent) {
+        const pauseCb = this.surveillanceAgent.getPauseCallback();
+        if (pauseCb) {
+          pauseCb(false);
+          await ctx.reply('▶️ Мониторинг возобновлён.');
+        } else {
+          await ctx.reply('❌ Callback для pause не установлен.');
+        }
+      } else {
+        await ctx.reply('❌ Ошибка: агент наблюдения не инициализирован.');
       }
     });
 
     this.bot.command('silent', async (ctx) => {
       const chatId = ctx.chat?.id.toString();
       if (!this.isAuthorized(chatId)) {
-        await ctx.reply('вќЊ Unauthorized');
+        await ctx.reply('❌ Unauthorized');
         return;
       }
       await this.setSilentMode(true, ctx);
@@ -308,7 +297,7 @@ export class DispatcherAgent {
     this.bot.command('voice', async (ctx) => {
       const chatId = ctx.chat?.id.toString();
       if (!this.isAuthorized(chatId)) {
-        await ctx.reply('вќЊ Unauthorized');
+        await ctx.reply('❌ Unauthorized');
         return;
       }
       await this.setSilentMode(false, ctx);
@@ -339,17 +328,9 @@ export class DispatcherAgent {
             const conf = confirmations[i];
             const last4 = conf.external_id.slice(-4).padStart(4, '*');
             const createdAt = new Date(conf.created_at).toLocaleString('ru-RU', {
-              day: '2-digit',
-              month: '2-digit',
-              year: '2-digit',
-              hour: '2-digit',
-              minute: '2-digit'
+              day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit'
             });
-            
-            response += `${i + 1}. ИИН: ${last4}\n`;
-            response += `   Статус: ${conf.status}\n`;
-            response += `   Попыток: ${conf.sms_attempts}\n`;
-            response += `   Обновлено: ${createdAt}\n\n`;
+            response += `${i + 1}. ИИН: ${last4}\n   Статус: ${conf.status}\n   Попыток: ${conf.sms_attempts}\n   Обновлено: ${createdAt}\n\n`;
           }
           await ctx.reply(response);
         }
@@ -365,44 +346,25 @@ export class DispatcherAgent {
         await ctx.reply('❌ Unauthorized');
         return;
       }
-      const arg = ctx.message?.text?.split(' ')[1];
+      const arg = ctx.payload;
       if (arg) {
         try {
-          if (!this.surveillanceAgent) {
-            await ctx.reply('❌ Ошибка: агент наблюдения не инициализирован.');
-            return;
-          }
+          if (!this.surveillanceAgent) { await ctx.reply('❌ Ошибка: агент наблюдения не инициализирован.'); return; }
           const registry = this.surveillanceAgent.getRegistry();
-          if (!registry) {
-            await ctx.reply('❌ Ошибка: реестр не инициализирован.');
-            return;
-          }
+          if (!registry) { await ctx.reply('❌ Ошибка: реестр не инициализирован.'); return; }
+          
           const confirmation = await registry.findConfirmationByPartialId(arg);
           if (confirmation) {
             const last4 = confirmation.external_id.slice(-4).padStart(4, '*');
             const createdAt = new Date(confirmation.created_at).toLocaleString('ru-RU', {
-              day: '2-digit',
-              month: '2-digit',
-              year: '2-digit',
-              hour: '2-digit',
-              minute: '2-digit'
+              day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit'
             });
             const updatedAt = new Date(confirmation.updated_at).toLocaleString('ru-RU', {
-              day: '2-digit',
-              month: '2-digit',
-              year: '2-digit',
-              hour: '2-digit',
-              minute: '2-digit'
+              day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit'
             });
-            
             const formattedAmount = confirmation.amount?.toLocaleString('ru-RU') || 'N/A';
             
-            await ctx.reply(`🔍 Заявка ${last4}:\n` +
-              `Статус: ${confirmation.status}\n` +
-              `Сумма: ${formattedAmount} тг\n` +
-              `Попыток SMS: ${confirmation.sms_attempts}\n` +
-              `Создана: ${createdAt}\n` +
-              `Обновлена: ${updatedAt}`);
+            await ctx.reply(`🔍 Заявка ${last4}:\nСтатус: ${confirmation.status}\nСумма: ${formattedAmount} тг\nПопыток SMS: ${confirmation.sms_attempts}\nСоздана: ${createdAt}\nОбновлена: ${updatedAt}`);
           } else {
             await ctx.reply(`❌ Заявка с ИИН ${arg} не найдена.`);
           }
@@ -422,15 +384,9 @@ export class DispatcherAgent {
         return;
       }
       try {
-        if (!this.surveillanceAgent) {
-          await ctx.reply('❌ Ошибка: агент наблюдения не инициализирован.');
-          return;
-        }
+        if (!this.surveillanceAgent) { await ctx.reply('❌ Ошибка: агент наблюдения не инициализирован.'); return; }
         const registry = this.surveillanceAgent.getRegistry();
-        if (!registry) {
-          await ctx.reply('❌ Ошибка: реестр не инициализирован.');
-          return;
-        }
+        if (!registry) { await ctx.reply('❌ Ошибка: реестр не инициализирован.'); return; }
         const count = await registry.clearStaleConfirmations();
         if (count > 0) {
           await ctx.reply(`🧹 Очищено ${count} зависших записей старше 30 минут.`);
@@ -450,43 +406,22 @@ export class DispatcherAgent {
         return;
       }
       if (this.surveillanceAgent) {
-        const status = await this.surveillanceAgent.getStatus();
-        const timestamp = new Date().toLocaleString('ru-RU', {
-          day: '2-digit',
-          month: '2-digit',
-          year: '2-digit',
-          hour: '2-digit',
-          minute: '2-digit'
-        });
-        await ctx.reply(`📊 Статус бота:\n` +
-          `🔒 Лок: ${status.isProcessingSms ? 'да' : 'нет'}\n` +
-          `📋 Активный заказ: ${status.currentSmsOrderId || '-'}\n` +
-          `Mode: ${this.getDeliveryModeLabel()}\n` +
-          `⏸️ Мониторинг: ${status.isMonitoringPaused ? 'на паузе' : 'активен'}\n` +
-          `⏰ Время: ${timestamp}`);
+        try {
+          const status = await this.surveillanceAgent.getStatus();
+          const timestamp = new Date().toLocaleString('ru-RU', {
+            day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit'
+          });
+          await ctx.reply(`📊 Статус бота:\n🔒 Лок: ${status.isProcessingSms ? 'да' : 'нет'}\n📋 Активный заказ: ${status.currentSmsOrderId || '-'}\nMode: ${this.getDeliveryModeLabel()}\n⏸️ Мониторинг: ${status.isMonitoringPaused ? 'на паузе' : 'активен'}\n⏰ Время: ${timestamp}`);
+        } catch (error) {
+          this.logger.error(`Error getting status: ${error}`);
+          await ctx.reply('❌ Ошибка при получении статуса.');
+        }
+      } else {
+        await ctx.reply('❌ Ошибка: агент наблюдения не инициализирован.');
       }
     });
 
-    this.bot.command('help', async (ctx) => {
-      const chatId = ctx.chat?.id.toString();
-      if (!this.isAuthorized(chatId)) {
-        await ctx.reply('❌ Unauthorized');
-        return;
-      }
-      await ctx.reply(`📖 Команды управления ботом:\n\n` +
-        `🔄 /reload — снять зависший лок\n` +
-        `⏭️ /skip — пропустить текущий заказ\n` +
-        `🔁 /again — повторить текущий заказ\n` +
-        `⏸️ /pause — приостановить мониторинг\n` +
-        `▶️ /resume — возобновить мониторинг\n` +
-        `📋 /pending — незавершённые заявки\n` +
-        `🔍 /order [иин] — статус заявки\n` +
-        `🧹 /clear — очистить зависшие записи\n` +
-        `📊 /status — статус бота\n` +
-        `📖 /help — эта справка`);
-    });
-
-    this.bot.command('start', (ctx) => {
+        this.bot.command('start', (ctx) => {
       if (this.isAuthorized(ctx.chat.id)) {
         ctx.reply('✅ Авторизовано. Система CreditBridge активна.');
       } else {
@@ -509,230 +444,6 @@ export class DispatcherAgent {
   private async handleAgainCommand(ctx: any): Promise<void> {
     // Implementation of handleAgainCommand would go here
     await ctx.reply('🔁 Команда again выполнена');
-  }
-
-  private async handleCommand(cmd: string, arg: string | undefined, ctx: any): Promise<void> {
-    switch(cmd) {
-      case 'reload': // Reload command
-        await this.handleReloadCommand(ctx);
-        break;
-      case 'skip': // Skip command
-        if (this.surveillanceAgent) {
-          const skipCallback = this.surveillanceAgent.getSkipCallback();
-          if (skipCallback) {
-            try {
-              const orderId = await skipCallback();
-              if (orderId) {
-                await ctx.reply(`⏭️ Заказ ${orderId} пропущен.\nСтатус обновлён: COMPLETED_EXTERNALLY.\nМониторинг возобновится в следующем цикле.`);
-              } else {
-                await ctx.reply('ℹ️ Нет активного заказа для пропуска.');
-              }
-            } catch (error) {
-              this.logger.error(`Error skipping order: ${error}`);
-              await ctx.reply('❌ Ошибка при пропуске заказа.');
-            }
-          } else {
-            await ctx.reply('❌ Callback для skip не установлен.');
-          }
-        } else {
-          await ctx.reply('❌ Ошибка: агент наблюдения не инициализирован.');
-        }
-        break;
-      case 'again': // Again command
-        await this.handleAgainCommand(ctx);
-        break;
-      case 'pause': // Pause monitoring
-        if (this.surveillanceAgent) {
-          const pauseCallback = this.surveillanceAgent.getPauseCallback();
-          if (pauseCallback) {
-            pauseCallback(true);
-            await ctx.reply('⏸️ Мониторинг приостановлен.\nТекущий SMS-флоу завершится штатно.\nДля возобновления: /resume');
-          } else {
-            await ctx.reply('❌ Callback для pause не установлен.');
-          }
-        } else {
-          await ctx.reply('❌ Ошибка: агент наблюдения не инициализирован.');
-        }
-        break;
-      case 'resume': // Resume monitoring
-        if (this.surveillanceAgent) {
-          const pauseCallback = this.surveillanceAgent.getPauseCallback();
-          if (pauseCallback) {
-            pauseCallback(false);
-            await ctx.reply('▶️ Мониторинг возобновлён.');
-          } else {
-            await ctx.reply('❌ Callback для pause не установлен.');
-          }
-        } else {
-          await ctx.reply('❌ Ошибка: агент наблюдения не инициализирован.');
-        }
-        break;
-      case 'silent':
-        await this.setSilentMode(true, ctx);
-        break;
-      case 'voice':
-        await this.setSilentMode(false, ctx);
-        break;
-      case 'pending': // Show pending orders
-        try {
-          if (!this.surveillanceAgent) {
-            await ctx.reply('❌ Ошибка: агент наблюдения не инициализирован.');
-            break;
-          }
-          const registry = this.surveillanceAgent.getRegistry();
-          if (!registry) {
-            await ctx.reply('❌ Ошибка: реестр не инициализирован.');
-            break;
-          }
-          const confirmations = await registry.getPendingConfirmations();
-          if (confirmations.length === 0) {
-            await ctx.reply('✅ Незавершённых заявок нет.');
-          } else {
-            let response = `📋 Незавершённые заявки (${confirmations.length}):\n\n`;
-            for (let i = 0; i < confirmations.length; i++) {
-              const conf = confirmations[i];
-              const last4 = conf.external_id.slice(-4).padStart(4, '*');
-              const createdAt = new Date(conf.created_at).toLocaleString('ru-RU', {
-                day: '2-digit',
-                month: '2-digit',
-                year: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit'
-              });
-              
-              response += `${i + 1}. ИИН: ${last4}\n`;
-              response += `   Статус: ${conf.status}\n`;
-              response += `   Попыток: ${conf.sms_attempts}\n`;
-              response += `   Обновлено: ${createdAt}\n\n`;
-            }
-            await ctx.reply(response);
-          }
-        } catch (error) {
-          this.logger.error(`Error getting pending orders: ${error}`);
-          await ctx.reply('❌ Ошибка при получении незавершённых заявок.');
-        }
-        break;
-      case 'order': // Status of specific order
-        if (arg) {
-          try {
-            if (!this.surveillanceAgent) {
-              await ctx.reply('❌ Ошибка: агент наблюдения не инициализирован.');
-              break;
-            }
-            const registry = this.surveillanceAgent.getRegistry();
-            if (!registry) {
-              await ctx.reply('❌ Ошибка: реестр не инициализирован.');
-              break;
-            }
-            const confirmation = await registry.findConfirmationByPartialId(arg);
-            if (confirmation) {
-              const last4 = confirmation.external_id.slice(-4).padStart(4, '*');
-              const createdAt = new Date(confirmation.created_at).toLocaleString('ru-RU', {
-                day: '2-digit',
-                month: '2-digit',
-                year: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit'
-              });
-              const updatedAt = new Date(confirmation.updated_at).toLocaleString('ru-RU', {
-                day: '2-digit',
-                month: '2-digit',
-                year: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit'
-              });
-              
-              const formattedAmount = confirmation.amount?.toLocaleString('ru-RU') || 'N/A';
-              
-              await ctx.reply(`🔍 Заявка ${last4}:\n` +
-                `Статус: ${confirmation.status}\n` +
-                `Сумма: ${formattedAmount} тг\n` +
-                `Попыток SMS: ${confirmation.sms_attempts}\n` +
-                `Создана: ${createdAt}\n` +
-                `Обновлена: ${updatedAt}`);
-            } else {
-              await ctx.reply(`❌ Заявка с ИИН ${arg} не найдена.`);
-            }
-          } catch (error) {
-            this.logger.error(`Error getting order status: ${error}`);
-            await ctx.reply('❌ Ошибка при получении статуса заявки.');
-          }
-        } else {
-          await ctx.reply('❌ Использование: /order [iin]');
-        }
-        break;
-      case 'clear': // Clear stale records
-        try {
-          if (!this.surveillanceAgent) {
-            await ctx.reply('❌ Ошибка: агент наблюдения не инициализирован.');
-            break;
-          }
-          const registry = this.surveillanceAgent.getRegistry();
-          if (!registry) {
-            await ctx.reply('❌ Ошибка: реестр не инициализирован.');
-            break;
-          }
-          const count = await registry.clearStaleConfirmations();
-          if (count > 0) {
-            await ctx.reply(`🧹 Очищено ${count} зависших записей старше 30 минут.`);
-          } else {
-            await ctx.reply('ℹ️ Зависших записей не найдено.');
-          }
-        } catch (error) {
-          this.logger.error(`Error clearing stale records: ${error}`);
-          await ctx.reply('❌ Ошибка при очистке зависших записей.');
-        }
-        break;
-      case 'status': // Status command
-        if (this.surveillanceAgent) {
-          try {
-            const status = await this.surveillanceAgent.getStatus();
-            const timestamp = new Date().toLocaleString('ru-RU', {
-              day: '2-digit',
-              month: '2-digit',
-              year: '2-digit',
-              hour: '2-digit',
-              minute: '2-digit'
-            });
-            await ctx.reply(`📊 Статус бота:\n` +
-              `🔒 Лок: ${status.isProcessingSms ? 'да' : 'нет'}\n` +
-              `📋 Активный заказ: ${status.currentSmsOrderId || '-'}\n` +
-              `Mode: ${this.getDeliveryModeLabel()}\n` +
-              `⏸️ Мониторинг: ${status.isMonitoringPaused ? 'на паузе' : 'активен'}\n` +
-              `⏰ Время: ${timestamp}`);
-          } catch (error) {
-            this.logger.error(`Error getting status: ${error}`);
-            await ctx.reply('❌ Ошибка при получении статуса.');
-          }
-        } else {
-          await ctx.reply('❌ Ошибка: агент наблюдения не инициализирован.');
-        }
-        break;
-      case 'help':
-      case 'справка': // Help command
-        await ctx.reply(`📖 Команды управления ботом:\n\n` +
-          `🔄 /reload — снять зависший лок\n` +
-          `⏭️ /skip — пропустить текущий заказ\n` +
-          `🔁 /again — повторить текущий заказ\n` +
-          `⏸️ /pause — приостановить мониторинг\n` +
-          `▶️ /resume — возобновить мониторинг\n` +
-          `📋 /pending — незавершённые заявки\n` +
-          `🔍 /order [иин] — статус заявки\n` +
-          `🧹 /clear — очистить зависшие записи\n` +
-          `📊 /status — статус бота\n` +
-          `📖 /help — эта справка`);
-        break;
-      case 'start': // Start command
-        if (this.isAuthorized(ctx.chat.id)) {
-          await ctx.reply('✅ Авторизовано. Система CreditBridge активна.');
-        } else {
-          await ctx.reply('❌ Доступ запрещён.');
-        }
-        break;
-      default:
-        await ctx.reply('❌ Неизвестная команда');
-        break;
-    }
   }
 
   async sendQRCode(photoBuffer: Buffer, orderId: string, amount: number): Promise<void> {

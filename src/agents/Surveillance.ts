@@ -1209,6 +1209,10 @@ export class SurveillanceAgent extends EventEmitter {
       }
       this.logger.info('Surveillance: SMS code entered into individual fields using keyboard press');
 
+      // Wait for frontend validation to process the completed code
+      await this.page.waitForTimeout(500);
+      this.logger.info('Surveillance: Waited 500ms for frontend validation after code entry');
+
       return true;
     } catch (error) {
       this.logger.error(`Surveillance: Failed to enter SMS code for ${orderId} - ${error}`);
@@ -1271,21 +1275,179 @@ export class SurveillanceAgent extends EventEmitter {
     }
   }
 
-  async clickConfirmButton(orderId: string): Promise<boolean> {
+  async clickConfirmButton(orderId: string): Promise<{ success: boolean; debugScreenshot?: Buffer }> {
     if (!this.page) throw new Error('Page not initialized');
-    
+
+    // Mock mode
+    if (process.env.BROWSER_MOCK === 'true') {
+      this.logger.info(`[MOCK] Confirm button clicked for ${orderId}`);
+      return { success: true };
+    }
+
+    const MAX_CLICK_ATTEMPTS = 3;
+    const MODAL_DISAPPEAR_TIMEOUT = 5000;
+
     try {
-      // Кнопка точно существует — видна в DevTools
-      const button = await this.page.waitForSelector(
+      this.logger.info(`Surveillance: Looking for confirm button for ${orderId}...`);
+
+      // Multiple locator strategies — dialog-scoped first, then broader
+      const buttonSelectors = [
+        'div[role="dialog"] button:has-text("Подтвердить")',
+        'div.bcc-modal_show button:has-text("Подтвердить")',
         'button[data-pw="submit-button"]',
-        { timeout: 10000 }
-      );
-      await button.click();
-      this.logger.info(`Surveillance: Confirm button clicked for ${orderId}`);
-      return true;
+        'div[role="dialog"] button[type="submit"]',
+        'div.bcc-modal_show button[type="submit"]',
+        'button:has-text("Подтвердить")',
+      ];
+
+      let confirmButton = null;
+      let usedSelector = '';
+
+      for (const selector of buttonSelectors) {
+        const btn = await this.page.$(selector);
+        if (btn) {
+          const isVisible = await btn.isVisible().catch(() => false);
+          if (isVisible) {
+            confirmButton = btn;
+            usedSelector = selector;
+            this.logger.info(`Surveillance: Confirm button found with selector: ${selector}`);
+            break;
+          }
+        }
+      }
+
+      if (!confirmButton) {
+        this.logger.error(`Surveillance: Confirm button NOT FOUND for ${orderId} with any selector`);
+        try {
+          const screenshotPath = path.join(this.storagePath, `error_confirm_btn_${orderId}.png`);
+          await this.page.screenshot({ path: screenshotPath, fullPage: false });
+          this.logger.info(`Surveillance: Debug screenshot saved to ${screenshotPath}`);
+        } catch (screenshotErr) {
+          this.logger.warn(`Surveillance: Failed to save debug screenshot: ${screenshotErr}`);
+        }
+        return { success: false };
+      }
+
+      // Wait for button to become enabled (frontend validates code first)
+      this.logger.info(`Surveillance: Waiting for confirm button to become enabled...`);
+      const enabledTimeout = 10000;
+      const pollInterval = 300;
+      const startTime = Date.now();
+
+      while (Date.now() - startTime < enabledTimeout) {
+        const isDisabled = await confirmButton.isDisabled().catch(() => true);
+        if (!isDisabled) {
+          this.logger.info(`Surveillance: Confirm button is now ENABLED (waited ${Date.now() - startTime}ms)`);
+          break;
+        }
+        await this.page.waitForTimeout(pollInterval);
+      }
+
+      // Final check — if still disabled, log warning but attempt click anyway
+      const stillDisabled = await confirmButton.isDisabled().catch(() => false);
+      if (stillDisabled) {
+        this.logger.warn(`Surveillance: Confirm button still DISABLED after ${enabledTimeout}ms. Attempting click anyway...`);
+      }
+
+      // Click with retry and modal disappearance verification
+      for (let attempt = 1; attempt <= MAX_CLICK_ATTEMPTS; attempt++) {
+        this.logger.info(`Surveillance: Clicking confirm button (attempt ${attempt}/${MAX_CLICK_ATTEMPTS}) using ${usedSelector}`);
+
+        // Scroll into view to ensure button is in viewport
+        await confirmButton.scrollIntoViewIfNeeded();
+        await this.page.waitForTimeout(200);
+
+        // Click the button
+        await confirmButton.click();
+        this.logger.info(`Surveillance: Confirm button clicked for ${orderId} (attempt ${attempt})`);
+
+        // Post-condition: verify the modal disappears
+        try {
+          await Promise.race([
+            this.page.waitForSelector('div[role="dialog"]', { state: 'hidden', timeout: MODAL_DISAPPEAR_TIMEOUT }).catch(() => null),
+            this.page.waitForSelector('div.bcc-modal.bcc-modal_show', { state: 'hidden', timeout: MODAL_DISAPPEAR_TIMEOUT }).catch(() => null),
+            this.page.waitForSelector('div[data-pw="input-code-container"]', { state: 'hidden', timeout: MODAL_DISAPPEAR_TIMEOUT }).catch(() => null),
+          ]);
+
+          // Double-check: is the modal actually gone?
+          const dialogVisible = await this.page.$('div[role="dialog"]').then(el => el?.isVisible()).catch(() => false);
+          const modalVisible = await this.page.$('div.bcc-modal.bcc-modal_show').then(el => el?.isVisible()).catch(() => false);
+
+          if (!dialogVisible && !modalVisible) {
+            this.logger.info(`Surveillance: ✅ Modal disappeared after confirm click for ${orderId}`);
+            return { success: true };
+          }
+
+          this.logger.warn(`Surveillance: Modal still visible after attempt ${attempt} for ${orderId}`);
+        } catch (waitError) {
+          this.logger.warn(`Surveillance: Modal disappearance check failed on attempt ${attempt}: ${waitError}`);
+        }
+
+        // After 2nd failed attempt — take debug screenshot for admin validation
+        let failureScreenshot: Buffer | undefined;
+        if (attempt === 2) {
+          this.logger.warn(`Surveillance: 2 attempts failed for ${orderId}, capturing debug screenshot for admin...`);
+          try {
+            failureScreenshot = await this.page.screenshot({ type: 'png', fullPage: false });
+            this.logger.info(`Surveillance: Debug screenshot captured after 2 failed attempts for ${orderId}`);
+          } catch (screenshotErr) {
+            this.logger.warn(`Surveillance: Failed to capture debug screenshot: ${screenshotErr}`);
+          }
+        }
+
+        // Check for error modals before retrying
+        const errorCheck = await this.checkSmsErrorModal();
+        if (errorCheck.error) {
+          this.logger.error(`Surveillance: Error modal detected after confirm click for ${orderId}, isBlocked: ${errorCheck.isBlocked}`);
+          return { success: false, debugScreenshot: failureScreenshot };
+        }
+
+        // Re-find the button for next attempt (DOM may have changed)
+        if (attempt < MAX_CLICK_ATTEMPTS) {
+          this.logger.info(`Surveillance: Re-locating confirm button for retry...`);
+          await this.page.waitForTimeout(500);
+
+          confirmButton = null;
+          for (const selector of buttonSelectors) {
+            const btn = await this.page.$(selector);
+            if (btn) {
+              const isVisible = await btn.isVisible().catch(() => false);
+              if (isVisible) {
+                confirmButton = btn;
+                usedSelector = selector;
+                break;
+              }
+            }
+          }
+
+          if (!confirmButton) {
+            // Button gone — check if modal also closed (success case)
+            const finalDialogCheck = await this.page.$('div[role="dialog"]').then(el => el?.isVisible()).catch(() => false);
+            const finalModalCheck = await this.page.$('div.bcc-modal.bcc-modal_show').then(el => el?.isVisible()).catch(() => false);
+
+            if (!finalDialogCheck && !finalModalCheck) {
+              this.logger.info(`Surveillance: ✅ Button and modal both gone — treating as success for ${orderId}`);
+              return { success: true };
+            }
+
+            this.logger.error(`Surveillance: Confirm button disappeared but modal still visible for ${orderId}`);
+            return { success: false };
+          }
+        }
+      }
+
+      // All attempts exhausted — take final screenshot for admin
+      this.logger.error(`Surveillance: ❌ Failed to confirm after ${MAX_CLICK_ATTEMPTS} attempts for ${orderId}`);
+      let finalScreenshot: Buffer | undefined;
+      try {
+        finalScreenshot = await this.page.screenshot({ type: 'png', fullPage: false });
+      } catch (e) {
+        this.logger.warn(`Surveillance: Failed to take final screenshot: ${e}`);
+      }
+      return { success: false, debugScreenshot: finalScreenshot };
     } catch (error) {
       this.logger.error(`Surveillance: Failed to click confirm button for ${orderId} - ${error}`);
-      return false;
+      return { success: false };
     }
   }
 

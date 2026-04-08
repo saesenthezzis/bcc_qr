@@ -1194,15 +1194,81 @@ export class DispatcherAgent {
               return;
             }
             
-                // Submit the code to browser
-                await this.retryOperation(async () => {
+                // Step 1: Enter the code into input fields
+                const codeEntered = await this.retryOperation(async () => {
                   if (!this.surveillanceAgent) {
                     throw new Error('Surveillance agent not available');
                   }
-                  await this.surveillanceAgent.enterSmsCode(smsCode, orderId);
+                  return await this.surveillanceAgent.enterSmsCode(smsCode, orderId);
                 });
-            
-            this.logger.info(`SMS code submitted successfully for ${orderId}`);
+
+            if (!codeEntered) {
+              this.logger.error(`Failed to enter SMS code for ${orderId}, attempt ${attemptNumber}`);
+              if (attemptNumber < maxAttempts) {
+                attemptNumber++;
+                continue;
+              }
+              await finalizeFlow(SmsFlowStatus.TIMEOUT, {
+                smsStatus: 'SMS_TIMEOUT',
+              });
+              return;
+            }
+
+            this.logger.info(`SMS code entered successfully for ${orderId}`);
+
+                // Step 2: Click the "Подтвердить" confirm button
+                const confirmResult = await this.retryOperation(async () => {
+                  if (!this.surveillanceAgent) {
+                    throw new Error('Surveillance agent not available');
+                  }
+                  return await this.surveillanceAgent.clickConfirmButton(orderId);
+                });
+
+            if (!confirmResult.success) {
+              this.logger.error(`Failed to click confirm button for ${orderId}, attempt ${attemptNumber}`);
+
+              // Send debug screenshot to admin for manual validation
+              if (confirmResult.debugScreenshot && this.adminChatId) {
+                try {
+                  const caption = `⚠️ МОДАЛКА НЕ ЗАКРЫЛАСЬ\n\nИИН: ${orderId}\nПопытка: ${attemptNumber}/${maxAttempts}\n\n❌ После 2 попыток нажатия кнопки "Подтвердить" модальное окно не исчезло.\nСкриншот для ручной валидации ошибки.`;
+
+                  await this.bot.telegram.sendPhoto(this.adminChatId, {
+                    source: confirmResult.debugScreenshot,
+                    filename: `confirm_fail_${orderId}.png`,
+                  }, {
+                    caption,
+                  });
+
+                  this.logger.info(`Dispatcher: Confirm failure screenshot sent to admin ${this.adminChatId} for ${orderId}`);
+                } catch (sendError) {
+                  await this.handleTelegramError(sendError, `sendConfirmFailureScreenshot to ${this.adminChatId}`);
+                }
+              }
+
+              // Check if it's a blocking error
+              if (this.surveillanceAgent) {
+                const errorCheck = await this.surveillanceAgent.checkSmsErrorModal();
+                if (errorCheck.isBlocked) {
+                  this.logger.error(`SMS blocked for ${orderId}, aborting flow`);
+                  await finalizeFlow(SmsFlowStatus.TIMEOUT, {
+                    smsStatus: 'SMS_TIMEOUT',
+                  });
+                  return;
+                }
+              }
+
+              if (attemptNumber < maxAttempts) {
+                attemptNumber++;
+                continue;
+              }
+              await finalizeFlow(SmsFlowStatus.TIMEOUT, {
+                smsStatus: 'SMS_TIMEOUT',
+              });
+              return;
+            }
+
+            // Step 3: Verify success
+            this.logger.info(`SMS code submitted and confirmed successfully for ${orderId}`);
             await finalizeFlow(SmsFlowStatus.SUCCESS, {
               smsStatus: 'SMS_CONFIRMED',
             });

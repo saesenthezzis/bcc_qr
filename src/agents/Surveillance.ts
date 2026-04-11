@@ -148,6 +148,8 @@ export class SurveillanceAgent extends EventEmitter {
     });
 
     this.page = await this.context.newPage();
+    this.page.setDefaultTimeout(90000);
+    this.page.setDefaultNavigationTimeout(90000);
 
     this.page.on('dialog', async (dialog) => {
       this.logger.info(`Surveillance: Dialog detected: ${dialog.message}`);
@@ -593,9 +595,24 @@ export class SurveillanceAgent extends EventEmitter {
     }
 
     try {
-      await this.page.reload({ waitUntil: 'networkidle' });
-      await this.page.waitForSelector('.bcc-table-body', { timeout: 60000 });
-      this.logger.info('Surveillance: Hard refresh completed');
+      this.logger.info('Surveillance: Hard refresh started...');
+
+      await this.page.reload({ waitUntil: 'domcontentloaded', timeout: 90000 });
+
+      try {
+        await this.page.waitForSelector('.bcc-table-body__row', { state: 'visible', timeout: 90000 });
+        this.logger.info('Surveillance: Page ready - table rows visible');
+      } catch {
+        this.logger.warn('Surveillance: Table not visible after reload, checking session...');
+        const sessionValid = await this.checkSessionValid().catch(() => false);
+        if (!sessionValid) {
+          this.logger.warn('Surveillance: Session expired, re-logging in...');
+          await this.login();
+        }
+      }
+
+      await this.page.waitForTimeout(5000);
+      this.logger.info('Surveillance: Hard refresh complete');
     } catch (error) {
       this.logger.error(`Surveillance: Hard refresh failed - ${error}`);
       throw error;
@@ -867,7 +884,7 @@ export class SurveillanceAgent extends EventEmitter {
           await row.click();
           await this.page.waitForSelector('div.bcc-fridge_open', {
             state: 'visible',
-            timeout: 10000
+            timeout: 30000
           });
           this.logger.info(`[INFO] Sidebar opened for order ${orderId}`);
 
@@ -875,7 +892,7 @@ export class SurveillanceAgent extends EventEmitter {
           try {
             await this.page.waitForSelector('div.bcc-fridge_content', { 
               state: 'visible', 
-              timeout: 10000 
+              timeout: 30000 
             });
             this.logger.info(`[INFO] Sidebar content loaded for order ${orderId}`);
           } catch (sidebarError) {
@@ -1029,7 +1046,7 @@ export class SurveillanceAgent extends EventEmitter {
       try {
         await this.page.waitForSelector(
           'div[data-pw="input-code-container"]',
-          { state: 'visible', timeout: 10000 }
+          { state: 'visible', timeout: 30000 }
         );
       } catch (modalError) {
         this.logger.error(`Surveillance: Modal did not appear after clicking Send SMS button - ${modalError}`);
@@ -1129,7 +1146,7 @@ export class SurveillanceAgent extends EventEmitter {
     try {
       await this.page.waitForSelector(
         '.bcc-snackbar, div:has-text("Заявка подтверждена")',
-        { state: 'visible', timeout: 10000 }
+        { state: 'visible', timeout: 30000 }
       );
       return true;
     } catch {
@@ -1334,7 +1351,7 @@ export class SurveillanceAgent extends EventEmitter {
 
       // Wait for button to become enabled (frontend validates code first)
       this.logger.info(`Surveillance: Waiting for confirm button to become enabled...`);
-      const enabledTimeout = 10000;
+      const enabledTimeout = 30000;
       const pollInterval = 300;
       const startTime = Date.now();
 
@@ -1627,6 +1644,8 @@ export class SurveillanceAgent extends EventEmitter {
 
       // Find the order row by searching for the last 4 digits in any cell of the row
       const last4 = orderId.slice(-4);
+      await this.page.waitForSelector('.bcc-table-body__row', { state: 'visible', timeout: 90000 });
+      await this.page.waitForTimeout(2000);
       const rows = await this.page.$$('.bcc-table-body__row');
       for (const row of rows) {
         const rowText = await row.innerText();
@@ -1639,7 +1658,7 @@ export class SurveillanceAgent extends EventEmitter {
           try {
             await this.page.waitForSelector('div.bcc-fridge_open', {
               state: 'visible',
-              timeout: 10000
+              timeout: 30000
             });
             this.logger.info(`Surveillance: Sidebar opened for order ${orderId}`);
             return true;

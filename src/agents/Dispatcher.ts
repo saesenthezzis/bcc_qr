@@ -635,9 +635,8 @@ export class DispatcherAgent {
 
   async sendSmsCodeRequest(orderId: string, screenshot: Buffer, isRetry: boolean = false, attemptNumber: number = 1, amount?: number): Promise<boolean> {
     let caption = '';
-    
     if (isRetry) {
-      caption = `⚠️ Код не подошёл. Клиенту отправлен новый SMS.\nПопытка ${attemptNumber}/3.\n\n📝 Ответьте на это сообщение новым кодом.`;
+      caption = `⚠️ Предыдущий код не подошёл. Клиенту направлен новый SMS.\nПопытка ${attemptNumber}/3\n\n📝 Ответьте на это сообщение новым кодом (только цифры).`;
     } else {
       caption = `📲 ВВЕДИТЕ SMS-КОД\nИИН: ${orderId}\nСумма: ${amount?.toFixed(2) || 'N/A'} тг\n\n📝 Ответьте на это сообщение кодом (только цифры).\nℹ️ У вас есть 5 минут.`;
     }
@@ -786,6 +785,18 @@ export class DispatcherAgent {
         this.logger.info(`Dispatcher: SMS blocked notification sent to chat_id ${chatId}${threadInfo} for order ${orderId}`);
       } catch (sendError) {
         await this.handleTelegramError(sendError, `sendSmsBlockedNotification to ${chatId}`);
+      }
+    }
+  }
+
+  async sendToAllowedChats(message: string): Promise<void> {
+    for (const { chatId, threadId } of this.getNotificationChats()) {
+      try {
+        await this.bot.telegram.sendMessage(chatId, message, {
+          message_thread_id: threadId,
+        });
+      } catch (error) {
+        await this.handleTelegramError(error, `sendToAllowedChats to ${chatId}`);
       }
     }
   }
@@ -1287,92 +1298,14 @@ export class DispatcherAgent {
               // Check for error/blocked modal after failed confirm
               if (this.surveillanceAgent) {
                 const errorCheck = await this.surveillanceAgent.checkSmsErrorModal();
-
-                if (errorCheck.isBlocked) {
-                  // === BLOCKED: 24-hour ban ===
-                  this.logger.error(`SMS BLOCKED for ${orderId} — 24-hour ban detected`);
-
-                  await this.sendSmsBlockedNotification(orderId);
-                  await finalizeFlow(SmsFlowStatus.TIMEOUT, {
-                    smsStatus: 'SMS_BLOCKED',
-                  });
-
-                  // Close the blocked modal
-                  await this.surveillanceAgent.closeSmsBlockedModal();
-                  return;
-                }
-
-                if (errorCheck.error) {
-                  // === ERROR but not blocked: wrong code, recovery flow ===
-                  this.logger.warn(`SMS error modal detected for ${orderId} (not blocked). Starting recovery...`);
-
-                  // Step 1: Wait 3 seconds for modal to settle
-                  await new Promise(r => setTimeout(r, 3000));
-
-                  // Step 2: Close error modal
-                  await this.surveillanceAgent.closeSmsBlockedModal();
-                  await new Promise(r => setTimeout(r, 1000));
-
-                  // Step 3: Increment sms_attempts
-                  if (registry) {
-                    const newAttempts = await registry.updateSmsAttempts(orderId);
-                    this.logger.info(`SMS attempts for ${orderId} incremented to ${newAttempts}`);
-
-                    // Step 4: Check limit
-                    if (newAttempts >= maxAttempts) {
-                      this.logger.error(`SMS attempts limit reached for ${orderId} (${newAttempts}/${maxAttempts})`);
-                      await this.sendSmsLimitExceeded(orderId, newAttempts);
-                      await finalizeFlow(SmsFlowStatus.TIMEOUT, {
-                        smsStatus: 'SMS_TIMEOUT',
-                      });
-                      return;
-                    }
-                  }
-
-                  // Step 5: Reload page and re-navigate
-                  this.logger.info(`Recovery: Reloading page for ${orderId}...`);
-                  const page = (this.surveillanceAgent as any).page;
-                  if (page) {
-                    await page.reload({ waitUntil: 'domcontentloaded', timeout: 60000 });
-                    await page.waitForLoadState('networkidle', { timeout: 60000 });
-                    await page.waitForTimeout(2000);
-                  }
-
-                  // Step 6: Open sidebar for the order
-                  const sidebarOpened = await this.surveillanceAgent.openSidebarForOrder(orderId);
-                  if (!sidebarOpened) {
-                    this.logger.error(`Recovery: Failed to open sidebar for ${orderId}`);
-                    await finalizeFlow(SmsFlowStatus.TIMEOUT, {
-                      smsStatus: 'SMS_TIMEOUT',
-                    });
-                    return;
-                  }
-
-                  // Step 7: Click Send SMS button directly (no Telegram decision)
-                  const retrySmsClicked = await this.surveillanceAgent.clickSendSmsButton(orderId);
-                  if (!retrySmsClicked) {
-                    this.logger.error(`Recovery: Failed to click Send SMS button for ${orderId}`);
-                    await finalizeFlow(SmsFlowStatus.TIMEOUT, {
-                      smsStatus: 'SMS_TIMEOUT',
-                    });
-                    return;
-                  }
-
-                  this.logger.info(`Recovery: Send SMS button clicked for ${orderId}, continuing to next attempt`);
-                  await syncSmsStatus('SMS_SENT', true);
-
-                  // Increment attemptNumber and continue the while loop
-                  // The loop will take a fresh screenshot, send retry code request, and wait for new code
-                  attemptNumber++;
-                  continue;
+                if (errorCheck.error || errorCheck.isBlocked) {
+                   this.logger.warn(`SMS error modal detected for ${orderId}. Returning ERROR_RECOVERY.`);
+                   await finalizeFlow(SmsFlowStatus.ERROR_RECOVERY);
+                   return;
                 }
               }
 
-              // No error modal detected — generic failure
-              if (attemptNumber < maxAttempts) {
-                attemptNumber++;
-                continue;
-              }
+              this.logger.error(`Generic failure to confirm SMS for ${orderId}`);
               await finalizeFlow(SmsFlowStatus.TIMEOUT, {
                 smsStatus: 'SMS_TIMEOUT',
               });

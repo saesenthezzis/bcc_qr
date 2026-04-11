@@ -99,6 +99,15 @@ async function processSmsConfirmation(
       Logger.info(`[SMS] Order ${order.external_id} confirmed successfully`);
     } else if (result === SmsFlowStatus.CANCELLED) {
       Logger.info(`[SMS] Order ${order.external_id} SMS flow cancelled by user`);
+    } else if (result === SmsFlowStatus.ERROR_RECOVERY) {
+      Logger.warn(`[SMS] Order ${order.external_id} needs error recovery flow`);
+      const attempts = await registry.updateSmsAttempts(orderId);
+      if (attempts >= 3) {
+        await dispatcher.sendToAllowedChats(`🚫 ИИН ${orderId}: исчерпаны все 3 попытки ввода SMS-кода.\nТребуется ручное подтверждение заявки.`);
+        await registry.updateSmsStatus(orderId, 'SMS_BLOCKED');
+      } else {
+        await runSmsRecovery(orderId, amount, order, attempts);
+      }
     } else {
       Logger.warn(`[SMS] Order ${order.external_id} SMS flow finished with timeout`);
     }
@@ -122,6 +131,96 @@ async function processSmsConfirmation(
     } catch (e) {
       Logger.error(`[SMS] Failed to auto-update status in finally: ${e}`);
     }
+  }
+}
+
+async function runSmsRecovery(orderId: string, amount: number, orderAttributes: any, attemptNumber: number): Promise<void> {
+  Logger.info(`[SMS] Recovery attempt ${attemptNumber}/3 for ${orderId}`);
+  
+  await surveillance.hardRefresh();
+  await new Promise(resolve => setTimeout(resolve, 3000));
+  
+  const stillPending = await surveillance.checkSmsConfirmationRequired(orderId);
+  if (!stillPending) {
+    Logger.info(`[SMS] Order ${orderId} no longer pending after refresh`);
+    await registry.updateSmsStatus(orderId, 'COMPLETED_EXTERNALLY');
+    return;
+  }
+  
+  const sidebarOpened = await surveillance.openSidebarForOrder(orderId);
+  if (!sidebarOpened) {
+    Logger.error(`[SMS] Cannot open sidebar for ${orderId} in recovery`);
+    await registry.updateSmsStatus(orderId, 'SMS_TIMEOUT');
+    return;
+  }
+  
+  const clicked = await surveillance.clickSendSmsButton(orderId);
+  if (!clicked) {
+    Logger.error(`[SMS] Cannot click SMS button for ${orderId} in recovery`);
+    await registry.updateSmsStatus(orderId, 'SMS_TIMEOUT');
+    return;
+  }
+  
+  const screenshot = await surveillance.takeSmsScreenshot(orderId, 'input');
+  if (!screenshot) {
+    Logger.error(`[SMS] Cannot take screenshot for ${orderId} in recovery`);
+    return;
+  }
+  
+  await dispatcher.sendSmsCodeRequest(orderId, screenshot, true, attemptNumber, amount);
+  await registry.updateSmsStatus(orderId, 'SMS_SENT');
+  
+  const TIMEOUT_MS = 5 * 60 * 1000;
+  const newCode = await Promise.race([
+    new Promise<string | null>((resolve) => {
+      dispatcher.registerSmsCodeCallback(orderId, (code) => {
+        resolve(code === 'CANCELLED' ? null : code);
+      });
+    }),
+    new Promise<string | null>((resolve) => {
+      setTimeout(() => {
+        dispatcher.unregisterSmsCodeCallback(orderId);
+        resolve(null);
+      }, TIMEOUT_MS);
+    })
+  ]);
+  
+  if (!newCode) {
+    Logger.warn(`[SMS] No code received in recovery for ${orderId}`);
+    await registry.updateSmsStatus(orderId, 'SMS_TIMEOUT');
+    return;
+  }
+  
+  const entered = await surveillance.enterSmsCode(newCode, orderId);
+  if (!entered) return;
+  
+  await new Promise(resolve => setTimeout(resolve, 3000));
+  
+  const errorCheck = await surveillance.checkSmsErrorModal();
+  if (errorCheck.error || errorCheck.isBlocked) {
+    const newAttempts = await registry.updateSmsAttempts(orderId);
+    if (newAttempts >= 3) {
+      await dispatcher.sendToAllowedChats(`🚫 ИИН ${orderId}: исчерпаны все 3 попытки.\nТребуется ручное подтверждение.`);
+      await registry.updateSmsStatus(orderId, 'SMS_BLOCKED');
+      return;
+    }
+    await runSmsRecovery(orderId, amount, orderAttributes, newAttempts);
+    return;
+  }
+  
+  await surveillance.clickConfirmButton(orderId);
+  const success = await surveillance.waitForSuccessPopup();
+  if (success) {
+    await registry.updateSmsStatus(orderId, 'SMS_CONFIRMED');
+    await dispatcher.sendToAllowedChats(`✅ Заявка ${orderId} подтверждена`);
+  } else {
+    const newAttempts = await registry.updateSmsAttempts(orderId);
+    if (newAttempts >= 3) {
+      await dispatcher.sendToAllowedChats(`🚫 ИИН ${orderId}: исчерпаны все 3 попытки.\nТребуется ручное подтверждение.`);
+      await registry.updateSmsStatus(orderId, 'SMS_BLOCKED');
+      return;
+    }
+    await runSmsRecovery(orderId, amount, orderAttributes, newAttempts);
   }
 }
 
@@ -380,3 +479,4 @@ main().catch(async (error) => {
   Logger.error(`Failed to start: ${error}`);
   await handleCriticalFailure(error);
 });
+

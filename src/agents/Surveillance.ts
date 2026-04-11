@@ -47,9 +47,15 @@ export class SurveillanceAgent extends EventEmitter {
   }
 
   setPauseCallback(callback: (paused: boolean) => void): void {
-    this.pauseCallback = callback;
+    this.pauseCallback = (paused: boolean) => {
+      this.isMonitoringPaused = paused;
+      callback(paused);
+    };
   }
 
+  public setMonitoringPaused(paused: boolean): void {
+    this.isMonitoringPaused = paused;
+  }
 
   public setRegistry(registry: RegistryAgent): void {
     this.registry = registry;
@@ -878,8 +884,6 @@ export class SurveillanceAgent extends EventEmitter {
 
           // Allow footer actions to render after the panel opens.
           await this.page.waitForTimeout(1500);
-
-          // Try multiple selectors with retry logic
           const smsButtonSelectors = [
             'div.bcc-fridge-footer button:has-text("Отправить SMS")',
             'button[data-pw="button"]:has-text("Отправить SMS")',
@@ -1669,7 +1673,7 @@ export class SurveillanceAgent extends EventEmitter {
 
   async getStatus(): Promise<{ isProcessingSms: boolean; currentSmsOrderId: string | null; isMonitoringPaused: boolean }> {
     if (!this.registry) {
-      return { isProcessingSms: false, currentSmsOrderId: null, isMonitoringPaused: false };
+      return { isProcessingSms: false, currentSmsOrderId: null, isMonitoringPaused: this.isMonitoringPaused };
     }
     
     try {
@@ -1677,11 +1681,11 @@ export class SurveillanceAgent extends EventEmitter {
       return {
         isProcessingSms: lockInfo.isLocked,
         currentSmsOrderId: lockInfo.orderId,
-        isMonitoringPaused: false // This should be managed separately
+        isMonitoringPaused: this.isMonitoringPaused,
       };
     } catch (error) {
       this.logger.error(`Surveillance: Failed to get SMS lock status - ${error}`);
-      return { isProcessingSms: false, currentSmsOrderId: null, isMonitoringPaused: false };
+      return { isProcessingSms: false, currentSmsOrderId: null, isMonitoringPaused: this.isMonitoringPaused };
     }
   }
 

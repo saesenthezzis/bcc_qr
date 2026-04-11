@@ -63,13 +63,18 @@ export class RegistryAgent {
     };
   }
 
-  async checkWithStatus(externalId: string): Promise<{ exists: boolean; status: ProcessStatus | null; dbError: boolean }> {
+  async checkWithStatus(externalId: string, amount?: number): Promise<{ exists: boolean; status: ProcessStatus | null; dbError: boolean }> {
     try {
-      const { data, error } = await this.client
+      let query = this.client
         .from('processed_orders')
         .select('external_id, status')
-        .eq('external_id', externalId)
-        .single();
+        .eq('external_id', externalId);
+
+      if (amount !== undefined) {
+        query = query.eq('amount', amount);
+      }
+
+      const { data, error } = await query.single();
 
       if (error && error.code !== 'PGRST116') {
         this.logger.error(`Registry checkWithStatus error: ${error.message}`);
@@ -97,7 +102,8 @@ export class RegistryAgent {
           amount: amount,
           status: 'PROCESSING',
         }, {
-          onConflict: 'external_id',
+          onConflict: 'external_id,amount',
+          ignoreDuplicates: true,
         });
 
       if (error) {
@@ -105,7 +111,7 @@ export class RegistryAgent {
         return false;
       }
 
-      this.logger.info(`Order ${externalId} reserved with status PROCESSING`);
+      this.logger.info(`Order ${externalId} (amount=${amount}) reserved with status PROCESSING`);
       return true;
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
@@ -114,12 +120,18 @@ export class RegistryAgent {
     }
   }
 
-  async updateOrderStatus(externalId: string, newStatus: ProcessStatus): Promise<void> {
+  async updateOrderStatus(externalId: string, newStatus: ProcessStatus, amount?: number): Promise<void> {
     try {
-      const { error } = await this.client
+      let query = this.client
         .from('processed_orders')
         .update({ status: newStatus })
         .eq('external_id', externalId);
+
+      if (amount !== undefined) {
+        query = query.eq('amount', amount);
+      }
+
+      const { error } = await query;
 
       if (error) {
         this.logger.error(`Registry updateOrderStatus error: ${error.message}`);
@@ -140,13 +152,13 @@ export class RegistryAgent {
     currentStatus?: ProcessStatus;
   }> {
     try {
-      const smsConfirmation = await this.getSmsConfirmation(order.external_id);
+      const smsConfirmation = await this.getSmsConfirmation(order.external_id, order.amount);
       if (order.status === 'PENDING' && smsConfirmation && smsConfirmation.sent_count >= 3) {
         this.logger.info(`Order ${order.external_id} skipped: SMS sent_count limit reached (${smsConfirmation.sent_count})`);
         return { shouldProcess: false, reason: 'ALREADY_PROCESSED' };
       }
 
-      const result = await this.checkWithStatus(order.external_id);
+      const result = await this.checkWithStatus(order.external_id, order.amount);
 
       // Критично: если БД не ответила — останавливаем обработку
       // Логика: "Не уверен — не стреляй"
@@ -189,7 +201,8 @@ export class RegistryAgent {
           amount: amount,
           status: status,
         }, {
-          onConflict: 'external_id',
+          onConflict: 'external_id,amount',
+          ignoreDuplicates: true,
         });
 
       if (error) {
@@ -197,7 +210,7 @@ export class RegistryAgent {
         return;
       }
 
-      this.logger.info(`Order ${externalId} registered in database with status ${status}`);
+      this.logger.info(`Order ${externalId} (amount=${amount}) registered in database with status ${status}`);
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       this.logger.error(`Failed to register order ${externalId}: ${errorMsg}`);
@@ -310,13 +323,18 @@ export class RegistryAgent {
     }
   }
 
-  async getSmsConfirmation(externalId: string): Promise<SmsConfirmation | null> {
+  async getSmsConfirmation(externalId: string, amount?: number): Promise<SmsConfirmation | null> {
     try {
-      const { data, error } = await this.client
+      let query = this.client
         .from('sms_confirmations')
         .select('*')
-        .eq('external_id', externalId)
-        .single();
+        .eq('external_id', externalId);
+
+      if (amount !== undefined) {
+        query = query.eq('amount', amount);
+      }
+
+      const { data, error } = await query.single();
 
       if (error && error.code !== 'PGRST116') {
         this.logger.error(`Registry getSmsConfirmation error: ${error.message}`);

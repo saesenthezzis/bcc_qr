@@ -61,7 +61,9 @@ surveillance.on('smsButtonNotFound', async ({ orderId, screenshotPath }) => {
   Logger.warn(`[SMS] SMS button not found for ${orderId}, sending screenshot to Telegram`);
   const fs = await import('fs');
   const buffer = fs.readFileSync(screenshotPath);
-  await dispatcher.sendSmsBlockedAlert(orderId, buffer);
+  // Не используем sendSmsBlockedAlert — он показывает "КОД НЕ ПРИНЯТ",
+  // что вводит в заблуждение. Здесь проблема — кнопка SMS не найдена.
+  await dispatcher.sendSmsButtonNotFoundAlert(orderId, buffer);
 });
 
 const CHECK_INTERVAL_MS = (parseInt(process.env.CHECK_INTERVAL_MINUTES || '1') * 60 * 1000);
@@ -84,6 +86,7 @@ async function processSmsConfirmation(
 ): Promise<void> {
   isProcessingSms = true;
   isMonitoringPaused = true;
+  surveillance.setMonitoringPaused(true);
   currentSmsOrderId = orderId;
   Logger.info(`[LOCK] SMS lock acquired for ${orderId}`);
   Logger.info(`[CYCLE] Monitoring paused for SMS flow of ${orderId}`);
@@ -104,6 +107,7 @@ async function processSmsConfirmation(
   } finally {
     isProcessingSms = false;
     isMonitoringPaused = false;
+    surveillance.setMonitoringPaused(false);
     currentSmsOrderId = null;
     Logger.info(`[LOCK] SMS lock released for ${orderId}`);
     Logger.info(`[CYCLE] Monitoring resumed after SMS flow of ${orderId}`);
@@ -165,7 +169,7 @@ async function processOrders(): Promise<void> {
         Logger.debug(`[DEBUG] Processing order ${order.external_id} with status: ${order.status}`);
 
         if (order.status === 'READY_FOR_QR') {
-          const rec = await registry.checkWithStatus(order.external_id);
+          const rec = await registry.checkWithStatus(order.external_id, order.amount);
           if (rec.dbError) {
             Logger.info(`[SKIP] Order ${order.external_id}: reason=DB_ERROR status=READY_FOR_QR`);
             continue;
@@ -187,7 +191,7 @@ async function processOrders(): Promise<void> {
           const qrBuffer = await generator.generateQR(order.amount, orderData.installmentPeriod || undefined);
           try {
             await dispatcher.sendQRCode(qrBuffer, order.external_id, order.amount);
-            await registry.updateOrderStatus(order.external_id, 'COMPLETED');
+            await registry.updateOrderStatus(order.external_id, 'COMPLETED', order.amount);
             Logger.info(`[COMPLETED] Order ${order.external_id} marked as COMPLETED after QR send`);
             processedCount++;
           } catch (error) {
@@ -197,7 +201,7 @@ async function processOrders(): Promise<void> {
         }
 
         if (order.status === 'PENDING') {
-          const rec = await registry.checkWithStatus(order.external_id);
+          const rec = await registry.checkWithStatus(order.external_id, order.amount);
           if (rec.dbError) {
             Logger.info(`[SKIP] Order ${order.external_id}: reason=DB_ERROR status=PENDING`);
             continue;
@@ -227,7 +231,7 @@ async function processOrders(): Promise<void> {
             continue;
           }
 
-          const smsRec = await registry.getSmsConfirmation(order.external_id);
+          const smsRec = await registry.getSmsConfirmation(order.external_id, order.amount);
           if (smsRec && finalSmsStatuses.includes(smsRec.status)) {
             Logger.debug(`[SMS] Order ${order.external_id} has final SMS status ${smsRec.status}, skip`);
             continue;

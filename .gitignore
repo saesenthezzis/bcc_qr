@@ -6,6 +6,7 @@ node_modules/
 .env.local
 .env.test
 .env.example
+.qwen
 
 # Build output
 dist/

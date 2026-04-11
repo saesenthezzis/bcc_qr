@@ -572,7 +572,7 @@ export class DispatcherAgent {
   // SMS Confirmation Methods
 
   async sendSmsConfirmationRequest(orderId: string, amount: number): Promise<boolean> {
-    const caption = `📱 ОТПРАВИТЬ SMS КЛИЕНТУ?\n\nИИН: ${orderId}\nСумма: ${amount.toFixed(2)} тг\n\n⚠️ Нажмите кнопку ниже чтобы отправить SMS-код клиенту.\n⚠️ Функция в тестовом режиме, возможны ошибки\nℹ️ Кнопка «Не отправлять SMS» не отменяет заявку клиента.`;
+    const caption = `📱 ОТПРАВИТЬ SMS КЛИЕНТУ?\n\nИИН: ${orderId}\nСумма: ${amount.toFixed(2)} тг\n\n⏸️ Мониторинг приостановлен — новые QR не генерируются.\nЕсли желаете подтвердить сами — нажмите «↩️ Не отправлять SMS».\n\n⚠️ Нажмите кнопку ниже чтобы отправить SMS-код клиенту.\nℹ️ Кнопка «Не отправлять SMS» не отменяет заявку клиента.`;
 
     this.decisionMessageRefs.delete(orderId);
     let successCount = 0;
@@ -751,6 +751,28 @@ export class DispatcherAgent {
     }
   }
 
+  async sendSmsButtonNotFoundAlert(orderId: string, screenshot: Buffer): Promise<void> {
+    if (!this.adminChatId) {
+      this.logger.warn('Dispatcher: ADMIN_ID not configured, SMS button not found alert skipped');
+      return;
+    }
+
+    try {
+      const caption = `⚠️ КНОПКА SMS НЕ НАЙДЕНА\n\nИИН: ${orderId}\n\nНе удалось найти кнопку отправки SMS на странице.\nВозможно, заявка была обработана или интерфейс изменился.`;
+
+      await this.bot.telegram.sendPhoto(this.adminChatId, {
+        source: screenshot,
+        filename: `sms_button_not_found_${orderId}.png`,
+      }, {
+        caption,
+      });
+
+      this.logger.info(`Dispatcher: SMS button not found alert sent to admin ${this.adminChatId} for order ${orderId}`);
+    } catch (sendError) {
+      await this.handleTelegramError(sendError, `sendSmsButtonNotFoundAlert to ${this.adminChatId}`);
+    }
+  }
+
   async sendSmsBlockedNotification(orderId: string): Promise<void> {
     const caption = `🚫 ИИН ${orderId}: доступ заблокирован на 24 часа.\nОбратитесь в поддержку: 605`;
 
@@ -896,7 +918,7 @@ export class DispatcherAgent {
 
       // Update the message
       await ctx.editMessageText(
-        `❌ ОТМЕНЕНО\n\nИИН: ${orderId}\n\n⚠️ ${username} отменил`,
+        `↩️ SMS НЕ БУДЕТ ОТПРАВЛЕН\n\nИИН: ${orderId}\n\n👤 ${username} отменил отправку\n✅ Заявка клиента НЕ отменена\n🔄 Бот возвращается к мониторингу`,
         { reply_markup: undefined }
       );
 
@@ -1416,7 +1438,7 @@ export class DispatcherAgent {
           ref.chatId,
           ref.messageId,
           undefined,
-          `📱 ОТПРАВИТЬ SMS КЛИЕНТУ?\n\nИИН: ${orderId}\n\n${countdownText}\n\n⚠️ Нажмите кнопку ниже чтобы отправить SMS-код клиенту.\n⚠️ Функция в тестовом режиме, возможны ошибки\nℹ️ Кнопка «Не отправлять SMS» не отменяет заявку клиента.`,
+          `📱 ОТПРАВИТЬ SMS КЛИЕНТУ?\n\nИИН: ${orderId}\n\n${countdownText}\n\n⏸️ Мониторинг приостановлен — новые QR не генерируются.\nЕсли желаете подтвердить сами — нажмите «↩️ Не отправлять SMS».\n\n⚠️ Нажмите кнопку ниже чтобы отправить SMS-код клиенту.\nℹ️ Кнопка «Не отправлять SMS» не отменяет заявку клиента.`,
           {
             reply_markup: {
               inline_keyboard: [

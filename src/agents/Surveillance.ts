@@ -1629,6 +1629,62 @@ export class SurveillanceAgent extends EventEmitter {
     }
   }
 
+  async checkSmsButtonExists(): Promise<boolean> {
+    if (!this.page) {
+      throw new Error('Page not initialized. Call login() first.');
+    }
+
+    // Mock mode
+    if (process.env.BROWSER_MOCK === 'true') {
+      this.logger.info('[MOCK] checkSmsButtonExists — returning true');
+      return true;
+    }
+
+    try {
+      // Allow footer actions to render
+      await this.page.waitForTimeout(1500);
+
+      const smsButtonSelectors = [
+        'div.bcc-fridge-footer button:has-text("Отправить SMS")',
+        'button[data-pw="button"]:has-text("Отправить SMS")',
+        'button:has-text("Отправить SMS")',
+        'button.bcc-button:has-text("Отправить SMS")',
+        'div.bcc-fridge button:has-text("Отправить")',
+      ];
+
+      // First attempt
+      for (const selector of smsButtonSelectors) {
+        const button = await this.page.$(selector);
+        if (button) {
+          const isVisible = await button.isVisible().catch(() => false);
+          if (isVisible) {
+            this.logger.info(`[INFO] ✅ SMS button FOUND with selector: ${selector}`);
+            return true;
+          }
+        }
+      }
+
+      // Retry after short delay
+      await this.page.waitForTimeout(500);
+      for (const selector of smsButtonSelectors) {
+        const button = await this.page.$(selector);
+        if (button) {
+          const isVisible = await button.isVisible().catch(() => false);
+          if (isVisible) {
+            this.logger.info(`[INFO] ✅ SMS button FOUND on retry with selector: ${selector}`);
+            return true;
+          }
+        }
+      }
+
+      this.logger.warn('[INFO] ❌ SMS button NOT FOUND in sidebar');
+      return false;
+    } catch (error) {
+      this.logger.error(`Surveillance: checkSmsButtonExists failed - ${error}`);
+      return false;
+    }
+  }
+
   async prepareOrderData(orderId: string): Promise<OrderData> {
     const installmentPeriod = await this.parseInstallmentPeriodFromSidebar(orderId);
     return { installmentPeriod };

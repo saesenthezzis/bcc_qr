@@ -261,6 +261,7 @@ async function processOrders(): Promise<void> {
       'USER_REFUSED_SMS',
       'SMS_BLOCKED',
       'COMPLETED_EXTERNALLY',
+      'SMS_BUTTON_NOT_FOUND',
     ];
 
     for (const order of orders) {
@@ -336,19 +337,68 @@ async function processOrders(): Promise<void> {
             continue;
           }
 
-          const requiresSms = await surveillance.checkSmsConfirmationRequired(order.external_id);
-          if (requiresSms) {
-            Logger.info(`[SMS] Starting SMS flow for ${order.external_id}`);
-            void processSmsConfirmation(order.external_id, order.amount, {
-              external_id: order.external_id,
-              amount: order.amount,
-            });
-            smsCount++;
-            break;
+          // Step 6: Open sidebar and check for SMS button
+          const sidebarOpened = await surveillance.openSidebarForOrder(order.external_id);
+          if (!sidebarOpened) {
+            Logger.warn(`[PENDING] Cannot open sidebar for ${order.external_id}, skipping`);
+            continue;
           }
 
-          Logger.info(`[SMS] Order ${order.external_id} does not require SMS flow`);
-          continue;
+          const hasSmsButton = await surveillance.checkSmsButtonExists();
+
+          // Step 7: No SMS button -> generate QR directly
+          if (!hasSmsButton) {
+            Logger.info(`[PENDING] No SMS button for ${order.external_id} — treating as READY_FOR_QR`);
+
+            // Register SMS_BUTTON_NOT_FOUND status
+            try {
+              await registry.registerSmsConfirmation(
+                order.external_id,
+                order.amount,
+                'SMS_BUTTON_NOT_FOUND'
+              );
+            } catch (regError) {
+              Logger.warn(`[PENDING] Failed to register SMS_BUTTON_NOT_FOUND for ${order.external_id}: ${regError}`);
+            }
+
+            // Check if QR already sent
+            const recQr = await registry.checkWithStatus(order.external_id, order.amount);
+            if (recQr.status === 'COMPLETED') {
+              Logger.info(`[SKIP] QR already sent for ${order.external_id}`);
+              await surveillance.closeSidebar(order.external_id);
+              continue;
+            }
+
+            // Close sidebar before QR generation
+            await surveillance.closeSidebar(order.external_id);
+
+            // Generate and send QR
+            try {
+              await registry.reserveOrder(order.external_id, order.amount);
+              const orderData = await surveillance.prepareOrderData(order.external_id);
+              const qrBuffer = await generator.generateQR(
+                order.amount,
+                orderData.installmentPeriod || undefined
+              );
+              await dispatcher.sendQRCode(qrBuffer, order.external_id, order.amount);
+              await registry.updateOrderStatus(order.external_id, 'COMPLETED');
+              Logger.info(`[QR] Sent for PENDING order ${order.external_id} (no SMS button)`);
+              processedCount++;
+            } catch (error) {
+              Logger.error(`[QR] Failed for ${order.external_id}: ${error}`);
+            }
+
+            continue; // Don't start SMS flow
+          }
+
+          // Step 8: SMS button exists -> start SMS flow
+          Logger.info(`[SMS] Starting SMS flow for ${order.external_id}`);
+          void processSmsConfirmation(order.external_id, order.amount, {
+            external_id: order.external_id,
+            amount: order.amount,
+          });
+          smsCount++;
+          break;
         }
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);

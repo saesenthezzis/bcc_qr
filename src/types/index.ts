@@ -8,7 +8,8 @@ export type SmsStatus =
   | 'USER_REFUSED_SMS'
   | 'IGNORED'
   | 'SMS_TIMEOUT'
-  | 'COMPLETED_EXTERNALLY';
+  | 'COMPLETED_EXTERNALLY'
+  | 'SMS_BUTTON_NOT_FOUND';
 
 export interface Order {
   external_id: string;

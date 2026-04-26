@@ -187,8 +187,25 @@ export class DispatcherAgent {
           }
         }
       }
-      
-      // 2. Старый обработчик SMS для входа (личка админа)
+
+      // 2. Fallback: 4-значный код без reply — привязать к активному заказу
+      if (this.isAuthorized(chatId) && /^\d{4}$/.test(text.trim())) {
+        if (this.smsCodeCallbacks.size > 0 && this.smsCodeReplyContexts.size > 0) {
+          const activeOrderId = this.smsCodeReplyContexts.keys().next().value;
+          if (activeOrderId) {
+            const orderId = activeOrderId.split(':')[0]; // Extract orderId from key format "orderId:chatId"
+            this.logger.info(`Dispatcher: 4-digit code without reply — applying to ${orderId}`);
+            await ctx.reply(
+              '✅ Код принят.\n' +
+              'ℹ️ Для надёжности используйте кнопку "Ответить" на сообщение с запросом кода.'
+            ).catch(() => {});
+            await this.handleSmsCodeReply(orderId, text.trim(), ctx);
+            return;
+          }
+        }
+      }
+
+      // 3. Старый обработчик SMS для входа (личка админа)
       if (this.isWaitingForSms && this.isAdmin(chatId)) {
         if (/^\d{4,8}$/.test(text)) {
           if (this.surveillanceAgent) {

@@ -106,7 +106,7 @@ export class SurveillanceAgent extends EventEmitter {
     this.logger.info('Surveillance: Initializing browser...');
 
     const sessionPath = path.join(this.storagePath, 'session.json');
-      let storageState: { cookies: any[], origins: any[] } | undefined = undefined;
+    let storageState: { cookies: any[], origins: any[] } | undefined = undefined;
 
     if (this.registry) {
       const cloudSession = await this.registry.loadSessionFromDb();
@@ -158,7 +158,7 @@ export class SurveillanceAgent extends EventEmitter {
 
     this.page.on('framenavigated', async () => {
       if (this.page) {
-        await this.page.keyboard.press('Enter').catch(() => {});
+        await this.page.keyboard.press('Enter').catch(() => { });
       }
     });
 
@@ -177,17 +177,17 @@ export class SurveillanceAgent extends EventEmitter {
 
     try {
       // Patience Mode: ждем полную загрузку страницы
-      await this.page!.goto('https://online.bcc.kz/cashier-cabinet/ru', { 
+      await this.page!.goto('https://online.bcc.kz/cashier-cabinet/ru', {
         waitUntil: 'domcontentloaded',
-        timeout: 60000 
+        timeout: 60000
       });
-      
+
       // Дополнительное ожидание networkidle после domcontentloaded
       await this.page!.waitForLoadState('networkidle', { timeout: 60000 });
 
       await this.page!.waitForTimeout(500);
       for (let i = 0; i < 3; i++) {
-        await this.page!.keyboard.press('Enter').catch(() => {});
+        await this.page!.keyboard.press('Enter').catch(() => { });
         await this.page!.waitForTimeout(200);
       }
       this.logger.info('Surveillance: Certificate popup dismissal attempted');
@@ -233,29 +233,29 @@ export class SurveillanceAgent extends EventEmitter {
         // Patience Mode: 3 попытки с reload и ожиданием 60s
         for (let attempt = 1; attempt <= 3; attempt++) {
           this.logger.info(`Surveillance: Reload attempt ${attempt}/3 with 60s patience`);
-          
+
           // Полная перезагрузка страницы
-          await this.page!.reload({ 
+          await this.page!.reload({
             waitUntil: 'domcontentloaded',
-            timeout: 60000 
+            timeout: 60000
           });
           await this.page!.waitForLoadState('networkidle', { timeout: 60000 });
           await this.page!.waitForTimeout(10000); // Даем время на загрузку данных
 
           const retryState = await this.detectPageState();
-          
+
           if (retryState === 'LOGGED_IN') {
             this.logger.info('Surveillance: Table found after reload, considering as logged in');
             await this.saveSession(sessionPath);
             return;
           }
-          
+
           if (retryState === 'LOGIN_FORM') {
             this.logger.info('Surveillance: Login form found after reload');
             await this.performLogin(sessionPath);
             return;
           }
-          
+
           if (retryState === 'SKELETON') {
             this.logger.info(`Surveillance: Still skeleton on attempt ${attempt}, waiting more...`);
             try {
@@ -322,7 +322,7 @@ export class SurveillanceAgent extends EventEmitter {
 
       // Проверяем явный "скелетон" — серые блоки загрузки
       const hasSkeleton = await this.page!.isVisible('[class*="skeleton"]').catch(() => false) ||
-                          await this.page!.isVisible('[class*="loading"]').catch(() => false);
+        await this.page!.isVisible('[class*="loading"]').catch(() => false);
       if (hasSkeleton) {
         this.logger.debug('Surveillance: Skeleton/loading state detected');
         return 'SKELETON';
@@ -495,7 +495,7 @@ export class SurveillanceAgent extends EventEmitter {
       for (const selector of submitButtons) {
         const button = await this.page!.$(selector).catch(() => null);
         if (button) {
-          await button.click().catch(() => {});
+          await button.click().catch(() => { });
           this.logger.info(`Surveillance: Submit button clicked (${selector})`);
           break;
         }
@@ -683,9 +683,9 @@ export class SurveillanceAgent extends EventEmitter {
           const trimmedStatus = statusText.trim();
 
           let orderStatus: OrderStatus;
-          if (trimmedStatus === 'Выдано') {
+          if (trimmedStatus === 'Подтверждено') {
             orderStatus = 'READY_FOR_QR';
-          } else if (trimmedStatus === 'Нужно подтвердить') {
+          } else if (trimmedStatus === 'Подтвердить') {
             orderStatus = 'PENDING';
           } else {
             this.logger.debug(`Surveillance: Status "${trimmedStatus}" not matched, skipping`);
@@ -835,7 +835,7 @@ export class SurveillanceAgent extends EventEmitter {
       const backdropOpen = await this.page.$('.bcc-fridge-backdrop_open').catch(() => null);
       if (backdropOpen) {
         this.logger.info(`[INFO] Sidebar already open, closing it first...`);
-        
+
         // Try multiple methods to close sidebar
         // Method 1: Click on backdrop
         try {
@@ -844,12 +844,12 @@ export class SurveillanceAgent extends EventEmitter {
           await this.page.waitForTimeout(1000);
         } catch (backdropError) {
           this.logger.warn(`[INFO] Failed to click backdrop, trying close button...`);
-          
+
           // Method 2: Find and click close button
           const closeButton = await this.page.$('button[aria-label="Close"]').catch(() => null) ||
-                              await this.page.$('.bcc-fridge button.bcc-button_iconOnly').catch(() => null);
+            await this.page.$('.bcc-fridge button.bcc-button_iconOnly').catch(() => null);
           if (closeButton) {
-            await closeButton.click({ timeout: 2000 }).catch(() => {});
+            await closeButton.click({ timeout: 2000 }).catch(() => { });
             this.logger.info(`[INFO] Clicked close button`);
             await this.page.waitForTimeout(1000);
           } else {
@@ -859,7 +859,7 @@ export class SurveillanceAgent extends EventEmitter {
             await this.page.waitForTimeout(1000);
           }
         }
-        
+
         // Verify sidebar is closed
         const stillOpen = await this.page.$('.bcc-fridge-backdrop_open').catch(() => null);
         if (stillOpen) {
@@ -890,9 +890,9 @@ export class SurveillanceAgent extends EventEmitter {
 
           // Only after the sidebar is open do we wait for content to appear.
           try {
-            await this.page.waitForSelector('div.bcc-fridge_content', { 
-              state: 'visible', 
-              timeout: 30000 
+            await this.page.waitForSelector('div.bcc-fridge_content', {
+              state: 'visible',
+              timeout: 30000
             });
             this.logger.info(`[INFO] Sidebar content loaded for order ${orderId}`);
           } catch (sidebarError) {
@@ -949,7 +949,7 @@ export class SurveillanceAgent extends EventEmitter {
           // If still not found, take debug screenshot
           if (!hasSmsButton) {
             this.logger.warn(`[INFO] ❌ SMS button NOT FOUND for order ${orderId} after retry`);
-            
+
             try {
               const screenshotPath = path.join(this.storagePath, `error_sms_button_not_found_${orderId}.png`);
               await this.page.screenshot({
@@ -979,7 +979,7 @@ export class SurveillanceAgent extends EventEmitter {
       return false;
     } catch (error) {
       this.logger.error(`Surveillance: Failed to check SMS confirmation for ${orderId} - ${error}`);
-      
+
       // Take error screenshot
       try {
         const screenshotPath = path.join(this.storagePath, `error_check_sms_${orderId}.png`);
@@ -1197,7 +1197,7 @@ export class SurveillanceAgent extends EventEmitter {
     if (process.env.BROWSER_MOCK === 'true') {
       this.logger.info(`[MOCK] СМС-код "${code}" введен для ${orderId}, имитация успеха`);
       await new Promise(resolve => setTimeout(resolve, 2000));
-      this.logger.info(`[MOCK] Статус заявки ${orderId} изменен на "Выдано"`);
+      this.logger.info(`[MOCK] Статус заявки ${orderId} изменен на "Подтверждено"`);
       return true;
     }
 
@@ -1256,16 +1256,16 @@ export class SurveillanceAgent extends EventEmitter {
 
     try {
       this.logger.info('Surveillance: Looking for modal element for screenshot...');
-      
+
       // Wait for the modal to be fully rendered before taking screenshot
       await this.page.waitForSelector('div.bcc-modal.bcc-modal_show, div[role="dialog"]', { timeout: 5000 });
-      
+
       // Try to get the specific modal element first
       const modal = await this.page.$('div[role="dialog"], div.bcc-modal.bcc-modal_show');
       this.logger.info(`Surveillance: Modal found: ${!!modal}`);
-      
+
       let buffer: Buffer;
-      
+
       if (!modal) {
         // fallback — скриншот всей страницы
         this.logger.info('Surveillance: Taking screenshot of full page as fallback');
@@ -1275,7 +1275,7 @@ export class SurveillanceAgent extends EventEmitter {
           type: 'png'
         });
         buffer = fs.readFileSync(screenshotPath);
-        
+
         // Clean up file
         try {
           fs.unlinkSync(screenshotPath);
@@ -1287,7 +1287,7 @@ export class SurveillanceAgent extends EventEmitter {
         this.logger.info('Surveillance: Taking screenshot of modal element');
         buffer = await modal.screenshot({ type: 'png' });
       }
-      
+
       this.logger.info('Surveillance: Screenshot taken for modal');
       return buffer;
     } catch (error) {
@@ -1526,7 +1526,7 @@ export class SurveillanceAgent extends EventEmitter {
         await this.page.waitForTimeout(500);
         return;
       }
-      
+
       // Fallback: try .bcc-button_iconOnly in header
       const iconButton = await this.page.$('.bcc-fridge-header .bcc-button_iconOnly');
       if (iconButton) {
@@ -1535,16 +1535,16 @@ export class SurveillanceAgent extends EventEmitter {
         await this.page.waitForTimeout(500);
         return;
       }
-      
+
       // Last resort: Escape key
       await this.page.keyboard.press('Escape');
       this.logger.info(`[PROD] Order ${orderId} -> Sidebar closed (Escape)`);
       await this.page.waitForTimeout(500);
-      
+
     } catch (error) {
       this.logger.warn(`[PROD] Order ${orderId} -> Error closing sidebar: ${error}`);
       // Try Escape as last resort
-      await this.page.keyboard.press('Escape').catch(() => {});
+      await this.page.keyboard.press('Escape').catch(() => { });
       await this.page.waitForTimeout(500);
     }
   }
@@ -1557,7 +1557,7 @@ export class SurveillanceAgent extends EventEmitter {
       }
 
       this.logger.info(`[PROD] Order ${orderId} -> Opening sidebar to parse installment period...`);
-      
+
       // Use the existing openSidebarForOrder method for consistency
       const sidebarOpened = await this.openSidebarForOrder(orderId);
       if (!sidebarOpened) {
@@ -1569,20 +1569,20 @@ export class SurveillanceAgent extends EventEmitter {
       try {
         // Try precise selector first: div:has(> span:text("Рассрочка")) >> span.bcc-typography-paragraph_view_medium
         const installmentElement = await this.page.$('div:has(> span:text("Рассрочка")) span.bcc-typography-paragraph_view_medium');
-        
+
         if (installmentElement) {
           const installmentText = await installmentElement.innerText();
-          
+
           // Parse the value (e.g., "18 мес." -> "18 месяцев")
           const periodMatch = installmentText.match(/(\d+)\s*(месяц|месяца|месяцев|мес\.?)/i);
           if (periodMatch) {
             const installmentPeriod = `${periodMatch[1]} месяцев`;
             const bccCode = getBccCode(installmentPeriod);
             this.logger.info(`[PROD] Order ${orderId} -> Term: ${periodMatch[1]}m -> Code: ${bccCode}`);
-            
+
             // Close sidebar using close button
             await this.closeSidebar(orderId);
-            
+
             return installmentPeriod;
           }
         }
@@ -1598,32 +1598,32 @@ export class SurveillanceAgent extends EventEmitter {
           const installmentPeriod = `${periodMatch[1]} месяцев`;
           const bccCode = getBccCode(installmentPeriod);
           this.logger.info(`[PROD] Order ${orderId} -> Term: ${periodMatch[1]}m (fallback) -> Code: ${bccCode}`);
-          
+
           // Close sidebar
           await this.closeSidebar(orderId);
-          
+
           return installmentPeriod;
         }
       }
 
       this.logger.warn(`[PROD] Order ${orderId} -> Installment period not found`);
-      
+
       // Close sidebar anyway
       await this.closeSidebar(orderId);
-      
+
       // Return null instead of default value
       return null;
-      
+
     } catch (error) {
       this.logger.error(`[PROD] Order ${orderId} -> Failed to parse installment period: ${error}`);
-      
+
       // Try to close sidebar
       try {
         if (this.page) await this.closeSidebar(orderId);
       } catch (closeError) {
         this.logger.warn(`[PROD] Order ${orderId} -> Could not close sidebar: ${closeError}`);
       }
-      
+
       // Return null instead of default value
       return null;
     }
@@ -1750,7 +1750,7 @@ export class SurveillanceAgent extends EventEmitter {
     if (!this.registry) {
       return { isProcessingSms: false, currentSmsOrderId: null, isMonitoringPaused: this.isMonitoringPaused };
     }
-    
+
     try {
       const lockInfo = await this.registry.getSmsLockStatus();
       return {

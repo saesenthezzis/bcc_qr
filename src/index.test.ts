@@ -217,7 +217,7 @@ async function processOrders(): Promise<void> {
 
     for (const order of orders) {
       try {
-        // TEST MODE: Process ALL orders with "Выдано" status, ignore DB checks
+        // TEST MODE: Process ALL orders with "Подтверждено" status, ignore DB checks
         if (order.status === 'PENDING') {
           Logger.info(`Test: Skipping PENDING order ${order.external_id} (needs confirmation)`);
           pendingCount++;

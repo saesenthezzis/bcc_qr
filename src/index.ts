@@ -136,40 +136,40 @@ async function processSmsConfirmation(
 
 async function runSmsRecovery(orderId: string, amount: number, orderAttributes: any, attemptNumber: number): Promise<void> {
   Logger.info(`[SMS] Recovery attempt ${attemptNumber}/3 for ${orderId}`);
-  
+
   await surveillance.hardRefresh();
   await new Promise(resolve => setTimeout(resolve, 3000));
-  
+
   const stillPending = await surveillance.checkSmsConfirmationRequired(orderId);
   if (!stillPending) {
     Logger.info(`[SMS] Order ${orderId} no longer pending after refresh`);
     await registry.updateSmsStatus(orderId, 'COMPLETED_EXTERNALLY');
     return;
   }
-  
+
   const sidebarOpened = await surveillance.openSidebarForOrder(orderId);
   if (!sidebarOpened) {
     Logger.error(`[SMS] Cannot open sidebar for ${orderId} in recovery`);
     await registry.updateSmsStatus(orderId, 'SMS_TIMEOUT');
     return;
   }
-  
+
   const clicked = await surveillance.clickSendSmsButton(orderId);
   if (!clicked) {
     Logger.error(`[SMS] Cannot click SMS button for ${orderId} in recovery`);
     await registry.updateSmsStatus(orderId, 'SMS_TIMEOUT');
     return;
   }
-  
+
   const screenshot = await surveillance.takeSmsScreenshot(orderId, 'input');
   if (!screenshot) {
     Logger.error(`[SMS] Cannot take screenshot for ${orderId} in recovery`);
     return;
   }
-  
+
   await dispatcher.sendSmsCodeRequest(orderId, screenshot, true, attemptNumber, amount);
   await registry.updateSmsStatus(orderId, 'SMS_SENT');
-  
+
   const TIMEOUT_MS = 5 * 60 * 1000;
   const newCode = await Promise.race([
     new Promise<string | null>((resolve) => {
@@ -184,18 +184,18 @@ async function runSmsRecovery(orderId: string, amount: number, orderAttributes: 
       }, TIMEOUT_MS);
     })
   ]);
-  
+
   if (!newCode) {
     Logger.warn(`[SMS] No code received in recovery for ${orderId}`);
     await registry.updateSmsStatus(orderId, 'SMS_TIMEOUT');
     return;
   }
-  
+
   const entered = await surveillance.enterSmsCode(newCode, orderId);
   if (!entered) return;
-  
+
   await new Promise(resolve => setTimeout(resolve, 3000));
-  
+
   const errorCheck = await surveillance.checkSmsErrorModal();
   if (errorCheck.error || errorCheck.isBlocked) {
     const newAttempts = await registry.updateSmsAttempts(orderId);
@@ -207,7 +207,7 @@ async function runSmsRecovery(orderId: string, amount: number, orderAttributes: 
     await runSmsRecovery(orderId, amount, orderAttributes, newAttempts);
     return;
   }
-  
+
   await surveillance.clickConfirmButton(orderId);
   const success = await surveillance.waitForSuccessPopup();
   if (success) {

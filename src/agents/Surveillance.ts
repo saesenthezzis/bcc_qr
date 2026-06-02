@@ -901,6 +901,23 @@ export class SurveillanceAgent extends EventEmitter {
 
           // Allow footer actions to render after the panel opens.
           await this.page.waitForTimeout(1500);
+
+          // Diagnostic: log ALL buttons in sidebar to detect UI changes
+          try {
+            const allBtns = await this.page.$$('div.bcc-fridge-footer button, div.bcc-fridge button, .bcc-fridge_open button');
+            const btnTexts: string[] = [];
+            for (const btn of allBtns) {
+              const text = await btn.innerText().catch(() => '');
+              const isVis = await btn.isVisible().catch(() => false);
+              if (text.trim()) {
+                btnTexts.push(`"${text.trim()}" (visible=${isVis})`);
+              }
+            }
+            this.logger.info(`[DIAG] checkSmsConfirmationRequired buttons: [${btnTexts.join(', ')}]`);
+          } catch (diagError) {
+            this.logger.warn(`[DIAG] Failed to enumerate buttons: ${diagError}`);
+          }
+
           const smsButtonSelectors = [
             'div.bcc-fridge-footer button:has-text("Отправить SMS")',
             'button[data-pw="button"]:has-text("Отправить SMS")',
@@ -1492,7 +1509,7 @@ export class SurveillanceAgent extends EventEmitter {
         return false;
       }
 
-      // Check 3: Refresh and check status changed to "Выдано"
+      // Check 3: Refresh and check status changed to "Подтверждено"
       await this.softRefresh();
       await this.page.waitForTimeout(2000);
 
@@ -1643,6 +1660,22 @@ export class SurveillanceAgent extends EventEmitter {
     try {
       // Allow footer actions to render
       await this.page.waitForTimeout(1500);
+
+      // Diagnostic: log ALL buttons in sidebar to detect UI changes
+      try {
+        const allFooterButtons = await this.page.$$('div.bcc-fridge-footer button, div.bcc-fridge button, .bcc-fridge_open button');
+        const buttonTexts: string[] = [];
+        for (const btn of allFooterButtons) {
+          const text = await btn.innerText().catch(() => '');
+          const isVis = await btn.isVisible().catch(() => false);
+          if (text.trim()) {
+            buttonTexts.push(`"${text.trim()}" (visible=${isVis})`);
+          }
+        }
+        this.logger.info(`[DIAG] Sidebar buttons found: [${buttonTexts.join(', ')}]`);
+      } catch (diagError) {
+        this.logger.warn(`[DIAG] Failed to enumerate sidebar buttons: ${diagError}`);
+      }
 
       const smsButtonSelectors = [
         'div.bcc-fridge-footer button:has-text("Отправить SMS")',

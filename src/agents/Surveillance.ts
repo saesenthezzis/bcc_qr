@@ -919,6 +919,9 @@ export class SurveillanceAgent extends EventEmitter {
           }
 
           const smsButtonSelectors = [
+            'div.bcc-fridge-footer button:has-text("Подтвердить заявку через SMS")',
+            'button[data-pw="button"]:has-text("Подтвердить заявку через SMS")',
+            'button:has-text("Подтвердить заявку через SMS")',
             'div.bcc-fridge-footer button:has-text("Отправить SMS")',
             'button[data-pw="button"]:has-text("Отправить SMS")',
             'button:has-text("Отправить SMS")',
@@ -1016,7 +1019,7 @@ export class SurveillanceAgent extends EventEmitter {
   async clickSendSmsButton(orderId: string): Promise<boolean> {
     // Mock mode
     if (process.env.BROWSER_MOCK === 'true') {
-      this.logger.info(`[MOCK] Кнопка "Отправить SMS" нажата для ${orderId}`);
+      this.logger.info(`[MOCK] Кнопка "Подтвердить заявку через SMS" нажата для ${orderId}`);
       await new Promise(resolve => setTimeout(resolve, 500));
       return true;
     }
@@ -1033,9 +1036,11 @@ export class SurveillanceAgent extends EventEmitter {
 
       // Define button selectors in order of priority
       const buttonSelectors = [
+        'div.bcc-fridge-footer button:has-text("Подтвердить заявку через SMS")',
         'div.bcc-fridge-footer button[data-pw="button"]',
         'div.bcc-fridge-footer .bcc-button',
         '.bcc-fridge_open button[data-pw="button"]',
+        'button:has-text("Подтвердить заявку через SMS")',
         'button:has-text("Отправить SMS")',
       ];
 
@@ -1678,6 +1683,9 @@ export class SurveillanceAgent extends EventEmitter {
       }
 
       const smsButtonSelectors = [
+        'div.bcc-fridge-footer button:has-text("Подтвердить заявку через SMS")',
+        'button[data-pw="button"]:has-text("Подтвердить заявку через SMS")',
+        'button:has-text("Подтвердить заявку через SMS")',
         'div.bcc-fridge-footer button:has-text("Отправить SMS")',
         'button[data-pw="button"]:has-text("Отправить SMS")',
         'button:has-text("Отправить SMS")',

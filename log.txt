@@ -1,0 +1,350 @@
+2026-06-07T05:26:05.951429064Z [2026-06-07T05:26:05.951Z] [INFO] Surveillance: Running rotation...
+2026-06-07T05:26:05.951691668Z [2026-06-07T05:26:05.951Z] [INFO] Surveillance: Starting login...
+2026-06-07T05:27:13.658848406Z [2026-06-07T05:27:13.658Z] [INFO] [CMD-DEBUG] Message received: chatId=7234119362 text="/voice" authorized=true
+2026-06-07T05:27:13.659268659Z [2026-06-07T05:27:13.659Z] [INFO] Dispatcher: Delivery mode changed to voice by 7234119362
+2026-06-07T05:27:28.215527023Z [2026-06-07T05:27:28.215Z] [ERROR] Surveillance: Login failed - page.waitForLoadState: Timeout 60000ms exceeded.
+2026-06-07T05:27:28.220359335Z [2026-06-07T05:27:28.220Z] [ERROR] Critical error in processing cycle: page.waitForLoadState: Timeout 60000ms exceeded.
+2026-06-07T05:27:28.220383106Z [2026-06-07T05:27:28.220Z] [ERROR] Critical scheduler failure: TimeoutError: page.waitForLoadState: Timeout 60000ms exceeded.
+2026-06-07T05:28:58.314730092Z [2026-06-07T05:28:58.314Z] [ERROR] Surveillance: Failed to take error screenshot (critical_failure) - TimeoutError: page.screenshot: Timeout 90000ms exceeded.
+2026-06-07T05:28:58.314758353Z Call log:
+2026-06-07T05:28:58.314767144Z   - taking page screenshot
+2026-06-07T05:28:58.314773564Z   - waiting for fonts to load...
+2026-06-07T05:28:58.314779694Z 
+2026-06-07T05:28:58.346062325Z [2026-06-07T05:28:58.345Z] [INFO] Dispatcher: Error message sent to admin 7234119362
+2026-06-07T05:28:58.816215379Z [2026-06-07T05:28:58.816Z] [INFO] Surveillance: Browser closed
+2026-06-07T05:28:58.817250585Z [2026-06-07T05:28:58.817Z] [INFO] Dispatcher: Telegram bot stopped
+2026-06-07T05:29:29.623548172Z [dotenv@17.3.1] injecting env (0) from .env -- tip: 🛡️ auth for agents: https://vestauth.com
+2026-06-07T05:29:29.624091951Z [2026-06-07T05:29:29.623Z] [INFO] CreditBridge RPA Engine starting...
+2026-06-07T05:29:29.624641971Z [2026-06-07T05:29:29.624Z] [INFO] Environment: NODE_ENV=production, isRender=true
+2026-06-07T05:29:29.624652782Z [2026-06-07T05:29:29.624Z] [INFO] ✅ [LIVE] Bot running in LIVE mode - monitoring real orders from bank
+2026-06-07T05:29:29.624659152Z [2026-06-07T05:29:29.624Z] [INFO] ✅ [LIVE] Mock mode disabled - all browser actions are real
+2026-06-07T05:29:29.725319973Z [2026-06-07T05:29:29.724Z] [INFO] Keep-Alive server listening on 0.0.0.0:3000
+2026-06-07T05:29:30.019484774Z [2026-06-07T05:29:30.018Z] [INFO] Health check server is live on port 3000
+2026-06-07T05:29:30.0196029Z [2026-06-07T05:29:30.018Z] [INFO] Starting scheduler with 60s interval
+2026-06-07T05:29:30.0196086Z [2026-06-07T05:29:30.018Z] [INFO] [STARTUP] Verifying Supabase connection...
+2026-06-07T05:29:30.719800419Z [2026-06-07T05:29:30.719Z] [INFO] [STARTUP] ✅ Supabase connection verified
+2026-06-07T05:29:30.71983428Z [2026-06-07T05:29:30.719Z] [INFO] [STARTUP] Initializing browser...
+2026-06-07T05:29:30.720049242Z [2026-06-07T05:29:30.719Z] [INFO] Surveillance: Initializing browser...
+2026-06-07T05:29:30.919788189Z [2026-06-07T05:29:30.919Z] [INFO] Session loaded from Supabase
+2026-06-07T05:29:30.921777466Z [2026-06-07T05:29:30.919Z] [INFO] Surveillance: Loaded session from Supabase
+2026-06-07T05:29:35.121362721Z [2026-06-07T05:29:35.121Z] [INFO] Surveillance: Browser initialized (1920x1080)
+2026-06-07T05:29:35.121393883Z [2026-06-07T05:29:35.121Z] [INFO] [STARTUP] ✅ Browser initialized
+2026-06-07T05:29:35.121400633Z [2026-06-07T05:29:35.121Z] [INFO] [STARTUP] Validating bank session...
+2026-06-07T05:29:36.024384463Z [2026-06-07T05:29:36.023Z] [WARN] [STARTUP] ⚠️ Bank session needs login (will authenticate on first cycle)
+2026-06-07T05:29:36.024488048Z [2026-06-07T05:29:36.024Z] [INFO] Running on Render cloud, sending startup notification...
+2026-06-07T05:29:36.118709641Z [2026-06-07T05:29:36.117Z] [INFO] Dispatcher: Startup notification sent to admin 7234119362
+2026-06-07T05:29:36.118731913Z [2026-06-07T05:29:36.117Z] [INFO] [STARTUP] ✅ All systems ready - CreditBridge RPA Engine is running!
+2026-06-07T05:29:36.118736443Z [2026-06-07T05:29:36.118Z] [INFO] --- Starting order processing cycle ---
+2026-06-07T05:29:36.118739783Z [2026-06-07T05:29:36.118Z] [INFO] Surveillance: Running rotation...
+2026-06-07T05:29:36.118743423Z [2026-06-07T05:29:36.118Z] [INFO] Surveillance: Starting login...
+2026-06-07T05:31:04.831661996Z [2026-06-07T05:31:04.829Z] [ERROR] Surveillance: Login failed - page.waitForLoadState: Timeout 60000ms exceeded.
+2026-06-07T05:31:04.921909264Z [2026-06-07T05:31:04.921Z] [ERROR] Critical error in processing cycle: page.waitForLoadState: Timeout 60000ms exceeded.
+2026-06-07T05:31:04.921938476Z [2026-06-07T05:31:04.921Z] [ERROR] Critical scheduler failure: TimeoutError: page.waitForLoadState: Timeout 60000ms exceeded.
+2026-06-07T05:31:08.548996996Z [2026-06-07T05:31:08.548Z] [INFO] [CMD-DEBUG] Message received: chatId=-1003413444754 text="доброе утро . В чат айти надо обратиться , проблема с интернетом" authorized=true
+2026-06-07T05:32:12.590711109Z [2026-06-07T05:32:12.590Z] [INFO] [CMD-DEBUG] Message received: chatId=7234119362 text="/voice" authorized=true
+2026-06-07T05:32:12.59110052Z [2026-06-07T05:32:12.591Z] [INFO] Dispatcher: Delivery mode changed to voice by 7234119362
+2026-06-07T05:32:34.924278121Z [2026-06-07T05:32:34.924Z] [ERROR] Surveillance: Failed to take error screenshot (critical_failure) - TimeoutError: page.screenshot: Timeout 90000ms exceeded.
+2026-06-07T05:32:34.924319183Z Call log:
+2026-06-07T05:32:34.924323524Z   - taking page screenshot
+2026-06-07T05:32:34.924326534Z   - waiting for fonts to load...
+2026-06-07T05:32:34.924329104Z 
+2026-06-07T05:32:34.956549206Z [2026-06-07T05:32:34.956Z] [INFO] Dispatcher: Error message sent to admin 7234119362
+2026-06-07T05:32:35.418815254Z [2026-06-07T05:32:35.418Z] [INFO] Surveillance: Browser closed
+2026-06-07T05:32:35.419752964Z [2026-06-07T05:32:35.419Z] [INFO] Dispatcher: Telegram bot stopped
+2026-06-07T05:33:23.945666516Z [dotenv@17.3.1] injecting env (0) from .env -- tip: ⚙️  override existing env vars with { override: true }
+2026-06-07T05:33:23.946214136Z [2026-06-07T05:33:23.945Z] [INFO] CreditBridge RPA Engine starting...
+2026-06-07T05:33:23.946226556Z [2026-06-07T05:33:23.946Z] [INFO] Environment: NODE_ENV=production, isRender=true
+2026-06-07T05:33:23.946273269Z [2026-06-07T05:33:23.946Z] [INFO] ✅ [LIVE] Bot running in LIVE mode - monitoring real orders from bank
+2026-06-07T05:33:23.94629473Z [2026-06-07T05:33:23.946Z] [INFO] ✅ [LIVE] Mock mode disabled - all browser actions are real
+2026-06-07T05:33:24.044019004Z [2026-06-07T05:33:24.043Z] [INFO] Keep-Alive server listening on 0.0.0.0:3000
+2026-06-07T05:33:24.244445012Z [2026-06-07T05:33:24.244Z] [INFO] Health check server is live on port 3000
+2026-06-07T05:33:24.244472983Z [2026-06-07T05:33:24.244Z] [INFO] Starting scheduler with 60s interval
+2026-06-07T05:33:24.244477703Z [2026-06-07T05:33:24.244Z] [INFO] [STARTUP] Verifying Supabase connection...
+2026-06-07T05:33:24.935012252Z [2026-06-07T05:33:24.934Z] [INFO] [STARTUP] ✅ Supabase connection verified
+2026-06-07T05:33:24.935045513Z [2026-06-07T05:33:24.934Z] [INFO] [STARTUP] Initializing browser...
+2026-06-07T05:33:24.935215173Z [2026-06-07T05:33:24.935Z] [INFO] Surveillance: Initializing browser...
+2026-06-07T05:33:25.038215712Z [2026-06-07T05:33:25.038Z] [INFO] Session loaded from Supabase
+2026-06-07T05:33:25.03855701Z [2026-06-07T05:33:25.038Z] [INFO] Surveillance: Loaded session from Supabase
+2026-06-07T05:33:30.237015771Z [2026-06-07T05:33:30.236Z] [INFO] Surveillance: Browser initialized (1920x1080)
+2026-06-07T05:33:30.237049962Z [2026-06-07T05:33:30.236Z] [INFO] [STARTUP] ✅ Browser initialized
+2026-06-07T05:33:30.237062133Z [2026-06-07T05:33:30.237Z] [INFO] [STARTUP] Validating bank session...
+2026-06-07T05:33:30.53975935Z [2026-06-07T05:33:30.539Z] [WARN] [STARTUP] ⚠️ Bank session needs login (will authenticate on first cycle)
+2026-06-07T05:33:30.539796783Z [2026-06-07T05:33:30.539Z] [INFO] Running on Render cloud, sending startup notification...
+2026-06-07T05:33:30.668176514Z [2026-06-07T05:33:30.667Z] [INFO] Dispatcher: Startup notification sent to admin 7234119362
+2026-06-07T05:33:30.668206246Z [2026-06-07T05:33:30.668Z] [INFO] [STARTUP] ✅ All systems ready - CreditBridge RPA Engine is running!
+2026-06-07T05:33:30.668702053Z [2026-06-07T05:33:30.668Z] [INFO] --- Starting order processing cycle ---
+2026-06-07T05:33:30.668798708Z [2026-06-07T05:33:30.668Z] [INFO] Surveillance: Running rotation...
+2026-06-07T05:33:30.669111455Z [2026-06-07T05:33:30.668Z] [INFO] Surveillance: Starting login...
+2026-06-07T05:35:16.142679711Z [2026-06-07T05:35:16.142Z] [ERROR] Surveillance: Login failed - page.waitForLoadState: Timeout 60000ms exceeded.
+2026-06-07T05:35:16.238328772Z [2026-06-07T05:35:16.238Z] [ERROR] Critical error in processing cycle: page.waitForLoadState: Timeout 60000ms exceeded.
+2026-06-07T05:35:16.238350174Z [2026-06-07T05:35:16.238Z] [ERROR] Critical scheduler failure: TimeoutError: page.waitForLoadState: Timeout 60000ms exceeded.
+2026-06-07T05:36:46.243135504Z [2026-06-07T05:36:46.242Z] [ERROR] Surveillance: Failed to take error screenshot (critical_failure) - TimeoutError: page.screenshot: Timeout 90000ms exceeded.
+2026-06-07T05:36:46.243161925Z Call log:
+2026-06-07T05:36:46.243166656Z   - taking page screenshot
+2026-06-07T05:36:46.243170846Z   - waiting for fonts to load...
+2026-06-07T05:36:46.243218358Z 
+2026-06-07T05:36:46.287709554Z [2026-06-07T05:36:46.287Z] [INFO] Dispatcher: Error message sent to admin 7234119362
+2026-06-07T05:36:46.8376257Z [2026-06-07T05:36:46.837Z] [INFO] Surveillance: Browser closed
+2026-06-07T05:36:46.838655955Z [2026-06-07T05:36:46.838Z] [INFO] Dispatcher: Telegram bot stopped
+2026-06-07T05:38:18.241645429Z [dotenv@17.3.1] injecting env (0) from .env -- tip: ⚙️  suppress all logs with { quiet: true }
+2026-06-07T05:38:18.241889172Z [2026-06-07T05:38:18.241Z] [INFO] CreditBridge RPA Engine starting...
+2026-06-07T05:38:18.241929565Z [2026-06-07T05:38:18.241Z] [INFO] Environment: NODE_ENV=production, isRender=true
+2026-06-07T05:38:18.241963986Z [2026-06-07T05:38:18.241Z] [INFO] ✅ [LIVE] Bot running in LIVE mode - monitoring real orders from bank
+2026-06-07T05:38:18.242006049Z [2026-06-07T05:38:18.241Z] [INFO] ✅ [LIVE] Mock mode disabled - all browser actions are real
+2026-06-07T05:38:18.334040565Z [2026-06-07T05:38:18.333Z] [INFO] Keep-Alive server listening on 0.0.0.0:3000
+2026-06-07T05:38:18.629354384Z [2026-06-07T05:38:18.629Z] [INFO] Health check server is live on port 3000
+2026-06-07T05:38:18.640974422Z [2026-06-07T05:38:18.640Z] [INFO] Starting scheduler with 60s interval
+2026-06-07T05:38:18.64259938Z [2026-06-07T05:38:18.642Z] [INFO] [STARTUP] Verifying Supabase connection...
+2026-06-07T05:38:19.42395164Z [2026-06-07T05:38:19.423Z] [INFO] [STARTUP] ✅ Supabase connection verified
+2026-06-07T05:38:19.423983202Z [2026-06-07T05:38:19.423Z] [INFO] [STARTUP] Initializing browser...
+2026-06-07T05:38:19.424204954Z [2026-06-07T05:38:19.424Z] [INFO] Surveillance: Initializing browser...
+2026-06-07T05:38:19.622123366Z [2026-06-07T05:38:19.621Z] [INFO] Session loaded from Supabase
+2026-06-07T05:38:19.622247603Z [2026-06-07T05:38:19.622Z] [INFO] Surveillance: Loaded session from Supabase
+2026-06-07T05:38:23.823335899Z [2026-06-07T05:38:23.823Z] [INFO] Surveillance: Browser initialized (1920x1080)
+2026-06-07T05:38:23.82335903Z [2026-06-07T05:38:23.823Z] [INFO] [STARTUP] ✅ Browser initialized
+2026-06-07T05:38:23.823364141Z [2026-06-07T05:38:23.823Z] [INFO] [STARTUP] Validating bank session...
+2026-06-07T05:38:24.721517897Z [2026-06-07T05:38:24.721Z] [WARN] [STARTUP] ⚠️ Bank session needs login (will authenticate on first cycle)
+2026-06-07T05:38:24.721592381Z [2026-06-07T05:38:24.721Z] [INFO] Running on Render cloud, sending startup notification...
+2026-06-07T05:38:24.819808712Z [2026-06-07T05:38:24.819Z] [INFO] Dispatcher: Startup notification sent to admin 7234119362
+2026-06-07T05:38:24.819841293Z [2026-06-07T05:38:24.819Z] [INFO] [STARTUP] ✅ All systems ready - CreditBridge RPA Engine is running!
+2026-06-07T05:38:24.820233135Z [2026-06-07T05:38:24.820Z] [INFO] --- Starting order processing cycle ---
+2026-06-07T05:38:24.820304539Z [2026-06-07T05:38:24.820Z] [INFO] Surveillance: Running rotation...
+2026-06-07T05:38:24.820540711Z [2026-06-07T05:38:24.820Z] [INFO] Surveillance: Starting login...
+2026-06-07T05:39:54.126150683Z [2026-06-07T05:39:54.125Z] [ERROR] Surveillance: Login failed - page.waitForLoadState: Timeout 60000ms exceeded.
+2026-06-07T05:39:54.222597578Z [2026-06-07T05:39:54.220Z] [ERROR] Critical error in processing cycle: page.waitForLoadState: Timeout 60000ms exceeded.
+2026-06-07T05:39:54.222615649Z [2026-06-07T05:39:54.220Z] [ERROR] Critical scheduler failure: TimeoutError: page.waitForLoadState: Timeout 60000ms exceeded.
+2026-06-07T05:41:24.229642384Z [2026-06-07T05:41:24.226Z] [ERROR] Surveillance: Failed to take error screenshot (critical_failure) - TimeoutError: page.screenshot: Timeout 90000ms exceeded.
+2026-06-07T05:41:24.229672396Z Call log:
+2026-06-07T05:41:24.229678596Z   - taking page screenshot
+2026-06-07T05:41:24.229682797Z   - waiting for fonts to load...
+2026-06-07T05:41:24.229686847Z 
+2026-06-07T05:41:24.259657647Z [2026-06-07T05:41:24.259Z] [INFO] Dispatcher: Error message sent to admin 7234119362
+2026-06-07T05:41:24.721627119Z [2026-06-07T05:41:24.721Z] [INFO] Surveillance: Browser closed
+2026-06-07T05:41:24.722676516Z [2026-06-07T05:41:24.722Z] [INFO] Dispatcher: Telegram bot stopped
+2026-06-07T06:14:10.347512378Z ==> Deploying...
+2026-06-07T06:14:10.579923725Z ==> Setting WEB_CONCURRENCY=1 by default, based on available CPUs in the instance
+2026-06-07T06:14:55.559864177Z [dotenv@17.3.1] injecting env (0) from .env -- tip: 🤖 agentic secret storage: https://dotenvx.com/as2
+2026-06-07T06:14:55.565134491Z [2026-06-07T06:14:55.559Z] [INFO] CreditBridge RPA Engine starting...
+2026-06-07T06:14:55.565149432Z [2026-06-07T06:14:55.564Z] [INFO] Environment: NODE_ENV=production, isRender=true
+2026-06-07T06:14:55.565153412Z [2026-06-07T06:14:55.564Z] [INFO] ✅ [LIVE] Bot running in LIVE mode - monitoring real orders from bank
+2026-06-07T06:14:55.565156742Z [2026-06-07T06:14:55.564Z] [INFO] ✅ [LIVE] Mock mode disabled - all browser actions are real
+2026-06-07T06:14:55.658625217Z [2026-06-07T06:14:55.658Z] [INFO] Keep-Alive server listening on 0.0.0.0:3000
+2026-06-07T06:14:55.958466061Z [2026-06-07T06:14:55.958Z] [INFO] Health check server is live on port 3000
+2026-06-07T06:14:55.958511933Z [2026-06-07T06:14:55.958Z] [INFO] Starting scheduler with 60s interval
+2026-06-07T06:14:55.958526514Z [2026-06-07T06:14:55.958Z] [INFO] [STARTUP] Verifying Supabase connection...
+2026-06-07T06:14:56.189749204Z [2026-06-07T06:14:56.189Z] [INFO] [CMD-DEBUG] Message received: chatId=-1003413444754 text="Добрый день, не можем зайти в личный кабинет" authorized=true
+2026-06-07T06:14:56.189800957Z [2026-06-07T06:14:56.189Z] [INFO] [CMD-DEBUG] Message received: chatId=7234119362 text="/voice" authorized=true
+2026-06-07T06:14:56.189953315Z [2026-06-07T06:14:56.189Z] [INFO] [CMD-DEBUG] Message received: chatId=-1003413444754 text="добрый , через другой браузер или очистить кеш" authorized=true
+2026-06-07T06:14:56.190302813Z [2026-06-07T06:14:56.190Z] [INFO] Dispatcher: Delivery mode changed to voice by 7234119362
+2026-06-07T06:14:57.061670753Z [2026-06-07T06:14:57.061Z] [INFO] [STARTUP] ✅ Supabase connection verified
+2026-06-07T06:14:57.061708255Z [2026-06-07T06:14:57.061Z] [INFO] [STARTUP] Initializing browser...
+2026-06-07T06:14:57.061879534Z [2026-06-07T06:14:57.061Z] [INFO] Surveillance: Initializing browser...
+2026-06-07T06:14:57.362748581Z [2026-06-07T06:14:57.362Z] [INFO] Session loaded from Supabase
+2026-06-07T06:14:57.362765712Z [2026-06-07T06:14:57.362Z] [INFO] Surveillance: Loaded session from Supabase
+2026-06-07T06:15:01.89229331Z ==> Your service is live 🎉
+2026-06-07T06:15:01.961029391Z [2026-06-07T06:15:01.960Z] [INFO] Surveillance: Browser initialized (1920x1080)
+2026-06-07T06:15:01.961048652Z [2026-06-07T06:15:01.960Z] [INFO] [STARTUP] ✅ Browser initialized
+2026-06-07T06:15:01.961051592Z [2026-06-07T06:15:01.960Z] [INFO] [STARTUP] Validating bank session...
+2026-06-07T06:15:02.106038824Z ==> 
+2026-06-07T06:15:02.122137606Z ==> ///////////////////////////////////////////////////////////
+2026-06-07T06:15:02.128063726Z ==> 
+2026-06-07T06:15:02.132084024Z ==> Available at your primary URL https://bcc-qr.onrender.com
+2026-06-07T06:15:02.135637252Z ==> 
+2026-06-07T06:15:02.139540637Z ==> ///////////////////////////////////////////////////////////
+2026-06-07T06:15:02.25923702Z [2026-06-07T06:15:02.258Z] [WARN] [STARTUP] ⚠️ Bank session needs login (will authenticate on first cycle)
+2026-06-07T06:15:02.259294103Z [2026-06-07T06:15:02.259Z] [INFO] Running on Render cloud, sending startup notification...
+2026-06-07T06:15:02.405805584Z [2026-06-07T06:15:02.405Z] [INFO] Dispatcher: Startup notification sent to admin 7234119362
+2026-06-07T06:15:02.405831655Z [2026-06-07T06:15:02.405Z] [INFO] [STARTUP] ✅ All systems ready - CreditBridge RPA Engine is running!
+2026-06-07T06:15:02.406223515Z [2026-06-07T06:15:02.406Z] [INFO] --- Starting order processing cycle ---
+2026-06-07T06:15:02.406239606Z [2026-06-07T06:15:02.406Z] [INFO] Surveillance: Running rotation...
+2026-06-07T06:15:02.40650239Z [2026-06-07T06:15:02.406Z] [INFO] Surveillance: Starting login...
+2026-06-07T06:15:11.741434318Z [2026-06-07T06:15:11.741Z] [INFO] [CMD-DEBUG] Message received: chatId=-1003413444754 text="Зашли с другого браузера, подтвердили, спасибо" authorized=true
+2026-06-07T06:15:27.707804379Z [2026-06-07T06:15:27.707Z] [INFO] [CMD-DEBUG] Message received: chatId=7234119362 text="/voice" authorized=true
+2026-06-07T06:15:27.708098595Z [2026-06-07T06:15:27.708Z] [INFO] Dispatcher: Delivery mode changed to voice by 7234119362
+2026-06-07T06:16:16.368767083Z [2026-06-07T06:16:16.368Z] [ERROR] Surveillance: Login failed - page.waitForLoadState: Timeout 60000ms exceeded.
+2026-06-07T06:16:16.462025007Z [2026-06-07T06:16:16.461Z] [ERROR] Critical error in processing cycle: page.waitForLoadState: Timeout 60000ms exceeded.
+2026-06-07T06:16:16.463015589Z [2026-06-07T06:16:16.461Z] [ERROR] Critical scheduler failure: TimeoutError: page.waitForLoadState: Timeout 60000ms exceeded.
+2026-06-07T06:17:46.464196429Z [2026-06-07T06:17:46.464Z] [ERROR] Surveillance: Failed to take error screenshot (critical_failure) - TimeoutError: page.screenshot: Timeout 90000ms exceeded.
+2026-06-07T06:17:46.464223381Z Call log:
+2026-06-07T06:17:46.464229691Z   - taking page screenshot
+2026-06-07T06:17:46.464238331Z   - waiting for fonts to load...
+2026-06-07T06:17:46.464243231Z 
+2026-06-07T06:17:46.530995169Z [2026-06-07T06:17:46.530Z] [INFO] Dispatcher: Error message sent to admin 7234119362
+2026-06-07T06:17:46.959156908Z [2026-06-07T06:17:46.958Z] [INFO] Surveillance: Browser closed
+2026-06-07T06:17:46.960237394Z [2026-06-07T06:17:46.960Z] [INFO] Dispatcher: Telegram bot stopped
+2026-06-07T06:17:53.449417497Z [dotenv@17.3.1] injecting env (0) from .env -- tip: 🔐 encrypt with Dotenvx: https://dotenvx.com
+2026-06-07T06:17:53.450000937Z [2026-06-07T06:17:53.449Z] [INFO] CreditBridge RPA Engine starting...
+2026-06-07T06:17:53.450066891Z [2026-06-07T06:17:53.449Z] [INFO] Environment: NODE_ENV=production, isRender=true
+2026-06-07T06:17:53.450122073Z [2026-06-07T06:17:53.450Z] [INFO] ✅ [LIVE] Bot running in LIVE mode - monitoring real orders from bank
+2026-06-07T06:17:53.450128544Z [2026-06-07T06:17:53.450Z] [INFO] ✅ [LIVE] Mock mode disabled - all browser actions are real
+2026-06-07T06:17:53.461856573Z [2026-06-07T06:17:53.461Z] [INFO] Keep-Alive server listening on 0.0.0.0:3000
+2026-06-07T06:17:53.751620133Z [2026-06-07T06:17:53.751Z] [INFO] Health check server is live on port 3000
+2026-06-07T06:17:53.751644355Z [2026-06-07T06:17:53.751Z] [INFO] Starting scheduler with 60s interval
+2026-06-07T06:17:53.751708308Z [2026-06-07T06:17:53.751Z] [INFO] [STARTUP] Verifying Supabase connection...
+2026-06-07T06:17:54.451499576Z [2026-06-07T06:17:54.451Z] [INFO] [STARTUP] ✅ Supabase connection verified
+2026-06-07T06:17:54.451537428Z [2026-06-07T06:17:54.451Z] [INFO] [STARTUP] Initializing browser...
+2026-06-07T06:17:54.451728087Z [2026-06-07T06:17:54.451Z] [INFO] Surveillance: Initializing browser...
+2026-06-07T06:17:54.650336503Z [2026-06-07T06:17:54.650Z] [INFO] Session loaded from Supabase
+2026-06-07T06:17:54.650396666Z [2026-06-07T06:17:54.650Z] [INFO] Surveillance: Loaded session from Supabase
+2026-06-07T06:17:58.953851111Z [2026-06-07T06:17:58.953Z] [INFO] Surveillance: Browser initialized (1920x1080)
+2026-06-07T06:17:58.953870302Z [2026-06-07T06:17:58.953Z] [INFO] [STARTUP] ✅ Browser initialized
+2026-06-07T06:17:58.953873732Z [2026-06-07T06:17:58.953Z] [INFO] [STARTUP] Validating bank session...
+2026-06-07T06:17:59.255028585Z [2026-06-07T06:17:59.254Z] [WARN] [STARTUP] ⚠️ Bank session needs login (will authenticate on first cycle)
+2026-06-07T06:17:59.255151891Z [2026-06-07T06:17:59.254Z] [INFO] Running on Render cloud, sending startup notification...
+2026-06-07T06:17:59.381573797Z [2026-06-07T06:17:59.381Z] [INFO] Dispatcher: Startup notification sent to admin 7234119362
+2026-06-07T06:17:59.381588668Z [2026-06-07T06:17:59.381Z] [INFO] [STARTUP] ✅ All systems ready - CreditBridge RPA Engine is running!
+2026-06-07T06:17:59.382048192Z [2026-06-07T06:17:59.381Z] [INFO] --- Starting order processing cycle ---
+2026-06-07T06:17:59.382114375Z [2026-06-07T06:17:59.382Z] [INFO] Surveillance: Running rotation...
+2026-06-07T06:17:59.382375609Z [2026-06-07T06:17:59.382Z] [INFO] Surveillance: Starting login...
+2026-06-07T06:18:11.052152185Z [2026-06-07T06:18:11.051Z] [INFO] [CMD-DEBUG] Message received: chatId=7234119362 text="/voice" authorized=true
+2026-06-07T06:18:11.0526218Z [2026-06-07T06:18:11.052Z] [INFO] Dispatcher: Delivery mode changed to voice by 7234119362
+2026-06-07T06:19:08.849303004Z [2026-06-07T06:19:08.848Z] [ERROR] Surveillance: Login failed - page.waitForLoadState: Timeout 60000ms exceeded.
+2026-06-07T06:19:08.950174894Z [2026-06-07T06:19:08.950Z] [ERROR] Critical error in processing cycle: page.waitForLoadState: Timeout 60000ms exceeded.
+2026-06-07T06:19:08.950203935Z [2026-06-07T06:19:08.950Z] [ERROR] Critical scheduler failure: TimeoutError: page.waitForLoadState: Timeout 60000ms exceeded.
+2026-06-07T06:20:03.484726136Z ==> Detected service running on port 3000
+2026-06-07T06:20:03.841533074Z ==> Docs on specifying a port: https://render.com/docs/web-services#port-binding
+2026-06-07T06:20:38.952791604Z [2026-06-07T06:20:38.952Z] [ERROR] Surveillance: Failed to take error screenshot (critical_failure) - TimeoutError: page.screenshot: Timeout 90000ms exceeded.
+2026-06-07T06:20:38.952815535Z Call log:
+2026-06-07T06:20:38.952820625Z   - taking page screenshot
+2026-06-07T06:20:38.952824795Z   - waiting for fonts to load...
+2026-06-07T06:20:38.952828656Z 
+2026-06-07T06:20:38.984624427Z [2026-06-07T06:20:38.984Z] [INFO] Dispatcher: Error message sent to admin 7234119362
+2026-06-07T06:20:39.548835992Z [2026-06-07T06:20:39.548Z] [INFO] Surveillance: Browser closed
+2026-06-07T06:20:39.549976111Z [2026-06-07T06:20:39.549Z] [INFO] Dispatcher: Telegram bot stopped
+2026-06-07T06:21:00.281714303Z [dotenv@17.3.1] injecting env (0) from .env -- tip: ⚡️ secrets for agents: https://dotenvx.com/as2
+2026-06-07T06:21:00.28223783Z [2026-06-07T06:21:00.281Z] [INFO] CreditBridge RPA Engine starting...
+2026-06-07T06:21:00.282284252Z [2026-06-07T06:21:00.282Z] [INFO] Environment: NODE_ENV=production, isRender=true
+2026-06-07T06:21:00.282344916Z [2026-06-07T06:21:00.282Z] [INFO] ✅ [LIVE] Bot running in LIVE mode - monitoring real orders from bank
+2026-06-07T06:21:00.282360347Z [2026-06-07T06:21:00.282Z] [INFO] ✅ [LIVE] Mock mode disabled - all browser actions are real
+2026-06-07T06:21:00.384356714Z [2026-06-07T06:21:00.384Z] [INFO] Keep-Alive server listening on 0.0.0.0:3000
+2026-06-07T06:21:00.585682931Z [2026-06-07T06:21:00.585Z] [INFO] Health check server is live on port 3000
+2026-06-07T06:21:00.585741424Z [2026-06-07T06:21:00.585Z] [INFO] Starting scheduler with 60s interval
+2026-06-07T06:21:00.585748675Z [2026-06-07T06:21:00.585Z] [INFO] [STARTUP] Verifying Supabase connection...
+2026-06-07T06:21:01.372737731Z [2026-06-07T06:21:01.372Z] [INFO] [STARTUP] ✅ Supabase connection verified
+2026-06-07T06:21:01.372769343Z [2026-06-07T06:21:01.372Z] [INFO] [STARTUP] Initializing browser...
+2026-06-07T06:21:01.372995244Z [2026-06-07T06:21:01.372Z] [INFO] Surveillance: Initializing browser...
+2026-06-07T06:21:02.074136822Z [2026-06-07T06:21:02.071Z] [INFO] Session loaded from Supabase
+2026-06-07T06:21:02.074158613Z [2026-06-07T06:21:02.071Z] [INFO] Surveillance: Loaded session from Supabase
+2026-06-07T06:21:05.874014598Z [2026-06-07T06:21:05.873Z] [INFO] Surveillance: Browser initialized (1920x1080)
+2026-06-07T06:21:05.874037049Z [2026-06-07T06:21:05.873Z] [INFO] [STARTUP] ✅ Browser initialized
+2026-06-07T06:21:05.87405022Z [2026-06-07T06:21:05.873Z] [INFO] [STARTUP] Validating bank session...
+2026-06-07T06:21:06.172517812Z [2026-06-07T06:21:06.172Z] [WARN] [STARTUP] ⚠️ Bank session needs login (will authenticate on first cycle)
+2026-06-07T06:21:06.172564715Z [2026-06-07T06:21:06.172Z] [INFO] Running on Render cloud, sending startup notification...
+2026-06-07T06:21:06.222952662Z [2026-06-07T06:21:06.222Z] [INFO] Dispatcher: Startup notification sent to admin 7234119362
+2026-06-07T06:21:06.222972393Z [2026-06-07T06:21:06.222Z] [INFO] [STARTUP] ✅ All systems ready - CreditBridge RPA Engine is running!
+2026-06-07T06:21:06.223353983Z [2026-06-07T06:21:06.223Z] [INFO] --- Starting order processing cycle ---
+2026-06-07T06:21:06.223445918Z [2026-06-07T06:21:06.223Z] [INFO] Surveillance: Running rotation...
+2026-06-07T06:21:06.223696501Z [2026-06-07T06:21:06.223Z] [INFO] Surveillance: Starting login...
+2026-06-07T06:22:13.977921931Z [2026-06-07T06:22:13.977Z] [ERROR] Surveillance: Login failed - page.waitForLoadState: Timeout 60000ms exceeded.
+2026-06-07T06:22:14.071768036Z [2026-06-07T06:22:14.071Z] [ERROR] Critical error in processing cycle: page.waitForLoadState: Timeout 60000ms exceeded.
+2026-06-07T06:22:14.071806538Z [2026-06-07T06:22:14.071Z] [ERROR] Critical scheduler failure: TimeoutError: page.waitForLoadState: Timeout 60000ms exceeded.
+2026-06-07T06:22:38.215038306Z [2026-06-07T06:22:38.214Z] [INFO] Dispatcher: Error message sent to admin 7234119362
+2026-06-07T06:22:38.873059914Z [2026-06-07T06:22:38.872Z] [INFO] Surveillance: Browser closed
+2026-06-07T06:22:38.874033874Z [2026-06-07T06:22:38.873Z] [INFO] Dispatcher: Telegram bot stopped
+2026-06-07T06:23:12.623416994Z [dotenv@17.3.1] injecting env (0) from .env -- tip: 🛡️ auth for agents: https://vestauth.com
+2026-06-07T06:23:12.623990074Z [2026-06-07T06:23:12.623Z] [INFO] CreditBridge RPA Engine starting...
+2026-06-07T06:23:12.624017875Z [2026-06-07T06:23:12.623Z] [INFO] Environment: NODE_ENV=production, isRender=true
+2026-06-07T06:23:12.624062638Z [2026-06-07T06:23:12.623Z] [INFO] ✅ [LIVE] Bot running in LIVE mode - monitoring real orders from bank
+2026-06-07T06:23:12.624075418Z [2026-06-07T06:23:12.624Z] [INFO] ✅ [LIVE] Mock mode disabled - all browser actions are real
+2026-06-07T06:23:12.721539471Z [2026-06-07T06:23:12.721Z] [INFO] Keep-Alive server listening on 0.0.0.0:3000
+2026-06-07T06:23:12.925360847Z [2026-06-07T06:23:12.925Z] [INFO] Health check server is live on port 3000
+2026-06-07T06:23:12.925390259Z [2026-06-07T06:23:12.925Z] [INFO] Starting scheduler with 60s interval
+2026-06-07T06:23:12.925401369Z [2026-06-07T06:23:12.925Z] [INFO] [STARTUP] Verifying Supabase connection...
+2026-06-07T06:23:13.414077771Z [2026-06-07T06:23:13.412Z] [INFO] [STARTUP] ✅ Supabase connection verified
+2026-06-07T06:23:13.414106422Z [2026-06-07T06:23:13.412Z] [INFO] [STARTUP] Initializing browser...
+2026-06-07T06:23:13.414109863Z [2026-06-07T06:23:13.413Z] [INFO] Surveillance: Initializing browser...
+2026-06-07T06:23:13.516798736Z [2026-06-07T06:23:13.516Z] [INFO] Session loaded from Supabase
+2026-06-07T06:23:13.517136984Z [2026-06-07T06:23:13.517Z] [INFO] Surveillance: Loaded session from Supabase
+2026-06-07T06:23:18.316779697Z [2026-06-07T06:23:18.316Z] [INFO] Surveillance: Browser initialized (1920x1080)
+2026-06-07T06:23:18.316805098Z [2026-06-07T06:23:18.316Z] [INFO] [STARTUP] ✅ Browser initialized
+2026-06-07T06:23:18.316809018Z [2026-06-07T06:23:18.316Z] [INFO] [STARTUP] Validating bank session...
+2026-06-07T06:23:18.623045304Z [2026-06-07T06:23:18.617Z] [INFO] Running on Render cloud, sending startup notification...
+2026-06-07T06:23:18.623112687Z [2026-06-07T06:23:18.617Z] [WARN] [STARTUP] ⚠️ Bank session needs login (will authenticate on first cycle)
+2026-06-07T06:23:18.745369877Z [2026-06-07T06:23:18.745Z] [INFO] Dispatcher: Startup notification sent to admin 7234119362
+2026-06-07T06:23:18.745514745Z [2026-06-07T06:23:18.745Z] [INFO] [STARTUP] ✅ All systems ready - CreditBridge RPA Engine is running!
+2026-06-07T06:23:18.746136127Z [2026-06-07T06:23:18.746Z] [INFO] --- Starting order processing cycle ---
+2026-06-07T06:23:18.746322037Z [2026-06-07T06:23:18.746Z] [INFO] Surveillance: Running rotation...
+2026-06-07T06:23:18.746669185Z [2026-06-07T06:23:18.746Z] [INFO] Surveillance: Starting login...
+2026-06-07T06:23:24.125053217Z [2026-06-07T06:23:24.123Z] [INFO] Surveillance: Certificate popup dismissal attempted
+2026-06-07T06:23:31.915381565Z [2026-06-07T06:23:31.915Z] [INFO] Surveillance: Login form detected, entering credentials
+2026-06-07T06:23:34.149014879Z [2026-06-07T06:23:34.148Z] [INFO] Surveillance: Phone field filled with +776479-66-60
+2026-06-07T06:23:36.113394849Z [2026-06-07T06:23:36.113Z] [INFO] Surveillance: Checking for SMS verification or table...
+2026-06-07T06:23:37.317102679Z [2026-06-07T06:23:37.316Z] [WARN] Surveillance: Neither table nor SMS field visible, waiting...
+2026-06-07T06:23:40.611178083Z [2026-06-07T06:23:40.610Z] [WARN] Surveillance: Could not determine login result
+2026-06-07T06:23:44.818200664Z [2026-06-07T06:23:44.817Z] [INFO] Session saved to local file
+2026-06-07T06:23:45.221929054Z [2026-06-07T06:23:45.221Z] [INFO] Session saved to Supabase
+2026-06-07T06:23:45.221972036Z [2026-06-07T06:23:45.221Z] [INFO] Session synced to Supabase
+2026-06-07T06:23:45.221977906Z [2026-06-07T06:23:45.221Z] [INFO] Surveillance: Login successful, session saved
+2026-06-07T06:23:45.222105743Z [2026-06-07T06:23:45.221Z] [INFO] Surveillance: Performing hard refresh (15 min interval)
+2026-06-07T06:23:45.222226709Z [2026-06-07T06:23:45.222Z] [INFO] Surveillance: Hard refresh started...
+2026-06-07T06:23:50.615650932Z [2026-06-07T06:23:50.615Z] [INFO] Surveillance: Page ready - table rows visible
+2026-06-07T06:23:55.615709124Z [2026-06-07T06:23:55.615Z] [INFO] Surveillance: Hard refresh complete
+2026-06-07T06:23:56.218905784Z [2026-06-07T06:23:56.218Z] [INFO] Surveillance: Soft refresh button clicked
+2026-06-07T06:23:59.919225707Z [2026-06-07T06:23:59.917Z] [INFO] Surveillance: Soft refresh completed
+2026-06-07T06:23:59.919245588Z [2026-06-07T06:23:59.917Z] [INFO] Surveillance: Extracting orders...
+2026-06-07T06:24:00.220714996Z [2026-06-07T06:24:00.215Z] [INFO] Surveillance: Found 13 rows in table
+2026-06-07T06:24:00.615738054Z [2026-06-07T06:24:00.615Z] [DEBUG] Surveillance: No status element, skipping
+2026-06-07T06:24:01.017234428Z [2026-06-07T06:24:01.017Z] [INFO] Surveillance: Extracted order ********1093 (420453 KZT, READY_FOR_QR)
+2026-06-07T06:24:01.217481098Z [2026-06-07T06:24:01.217Z] [DEBUG] Surveillance: No status element, skipping
+2026-06-07T06:24:01.616035659Z [2026-06-07T06:24:01.615Z] [INFO] Surveillance: Extracted order ********1509 (267779 KZT, READY_FOR_QR)
+2026-06-07T06:24:02.020545119Z [2026-06-07T06:24:02.019Z] [INFO] Surveillance: Extracted order ********1509 (562390 KZT, READY_FOR_QR)
+2026-06-07T06:24:02.426312275Z [2026-06-07T06:24:02.424Z] [INFO] Surveillance: Extracted order ********0565 (573042 KZT, READY_FOR_QR)
+2026-06-07T06:24:02.912625963Z [2026-06-07T06:24:02.912Z] [INFO] Surveillance: Extracted order ********0640 (152489 KZT, READY_FOR_QR)
+2026-06-07T06:24:03.221725258Z [2026-06-07T06:24:03.220Z] [INFO] Surveillance: Extracted order ********0389 (184726 KZT, READY_FOR_QR)
+2026-06-07T06:24:03.811958785Z [2026-06-07T06:24:03.811Z] [DEBUG] Surveillance: Status "В обработке" not matched, skipping
+2026-06-07T06:24:04.313444892Z [2026-06-07T06:24:04.313Z] [INFO] Surveillance: Extracted order ********0567 (457020 KZT, READY_FOR_QR)
+2026-06-07T06:24:04.517649128Z [2026-06-07T06:24:04.517Z] [DEBUG] Surveillance: No status element, skipping
+2026-06-07T06:24:05.014325975Z [2026-06-07T06:24:05.014Z] [INFO] Surveillance: Extracted order ********0512 (269989 KZT, READY_FOR_QR)
+2026-06-07T06:24:05.516425134Z [2026-06-07T06:24:05.516Z] [INFO] Surveillance: Extracted order ********1021 (264479 KZT, READY_FOR_QR)
+2026-06-07T06:24:05.516524169Z [2026-06-07T06:24:05.516Z] [INFO] Surveillance: Extracted 9 orders (9 ready, 0 pending)
+2026-06-07T06:24:05.51653573Z [2026-06-07T06:24:05.516Z] [INFO] Extracted 9 orders from bank
+2026-06-07T06:24:05.51655119Z [2026-06-07T06:24:05.516Z] [DEBUG] [DEBUG] Processing order ********1093 with status: READY_FOR_QR
+2026-06-07T06:24:05.916476413Z [2026-06-07T06:24:05.910Z] [INFO] Order ********1093 (amount=420453) reserved with status PROCESSING
+2026-06-07T06:24:05.916503224Z [2026-06-07T06:24:05.910Z] [INFO] [READY_FOR_QR] Processing order ********1093
+2026-06-07T06:24:05.916508104Z [2026-06-07T06:24:05.910Z] [INFO] [PROD] Order ********1093 -> Opening sidebar to parse installment period...
+2026-06-07T06:24:05.916512955Z [2026-06-07T06:24:05.910Z] [INFO] Surveillance: Opening sidebar for order ********1093
+2026-06-07T06:24:12.513627315Z [2026-06-07T06:24:12.513Z] [INFO] Surveillance: Sidebar opened for order ********1093
+2026-06-07T06:24:13.512585791Z [2026-06-07T06:24:13.512Z] [INFO] [LOG] Срок: 18 месяцев -> Код 1С: KZ284
+2026-06-07T06:24:13.512616463Z [2026-06-07T06:24:13.512Z] [INFO] [PROD] Order ********1093 -> Term: 18m -> Code: KZ284
+2026-06-07T06:24:16.014391634Z [2026-06-07T06:24:16.013Z] [INFO] [PROD] Order ********1093 -> Sidebar closed
+2026-06-07T06:24:16.614004708Z [2026-06-07T06:24:16.612Z] [INFO] [LOG] Срок: 18 месяцев -> Код 1С: KZ284
+2026-06-07T06:24:16.614024499Z [2026-06-07T06:24:16.612Z] [INFO] Generator: Protocol string: AI1|KZ284|2489604|420453.00|210140004940|KZ10609|1|0.00|1
+2026-06-07T06:24:17.71513563Z [2026-06-07T06:24:17.714Z] [INFO] Generator: QR code generated successfully
+2026-06-07T06:24:17.899016881Z [2026-06-07T06:24:17.898Z] [INFO] Dispatcher: QR sent to chat_id 7234119362 for order ********1093
+2026-06-07T06:24:18.113067009Z [2026-06-07T06:24:18.112Z] [INFO] Order ********1093 status updated to COMPLETED
+2026-06-07T06:24:18.113101521Z [2026-06-07T06:24:18.112Z] [INFO] [COMPLETED] Order ********1093 marked as COMPLETED after QR send
+2026-06-07T06:24:18.113107271Z [2026-06-07T06:24:18.112Z] [DEBUG] [DEBUG] Processing order ********1509 with status: READY_FOR_QR
+2026-06-07T06:24:18.213034131Z [2026-06-07T06:24:18.212Z] [INFO] [SKIP] Order ********1509: reason=ALREADY_COMPLETED status=READY_FOR_QR
+2026-06-07T06:24:18.213055062Z [2026-06-07T06:24:18.212Z] [DEBUG] [DEBUG] Processing order ********1509 with status: READY_FOR_QR
+2026-06-07T06:24:18.311299155Z [2026-06-07T06:24:18.311Z] [INFO] [SKIP] Order ********1509: reason=ALREADY_COMPLETED status=READY_FOR_QR
+2026-06-07T06:24:18.311316396Z [2026-06-07T06:24:18.311Z] [DEBUG] [DEBUG] Processing order ********0565 with status: READY_FOR_QR
+2026-06-07T06:24:18.41691096Z [2026-06-07T06:24:18.413Z] [INFO] [SKIP] Order ********0565: reason=ALREADY_COMPLETED status=READY_FOR_QR
+2026-06-07T06:24:18.416974764Z [2026-06-07T06:24:18.415Z] [DEBUG] [DEBUG] Processing order ********0640 with status: READY_FOR_QR
+2026-06-07T06:24:18.515072859Z [2026-06-07T06:24:18.511Z] [INFO] [SKIP] Order ********0640: reason=ALREADY_COMPLETED status=READY_FOR_QR
+2026-06-07T06:24:18.51509523Z [2026-06-07T06:24:18.511Z] [DEBUG] [DEBUG] Processing order ********0389 with status: READY_FOR_QR
+2026-06-07T06:24:18.576029945Z [2026-06-07T06:24:18.575Z] [INFO] [SKIP] Order ********0389: reason=ALREADY_COMPLETED status=READY_FOR_QR
+2026-06-07T06:24:18.610629262Z [2026-06-07T06:24:18.610Z] [DEBUG] [DEBUG] Processing order ********0567 with status: READY_FOR_QR
+2026-06-07T06:24:18.67298086Z [2026-06-07T06:24:18.672Z] [INFO] [SKIP] Order ********0567: reason=ALREADY_COMPLETED status=READY_FOR_QR
+2026-06-07T06:24:18.673003742Z [2026-06-07T06:24:18.672Z] [DEBUG] [DEBUG] Processing order ********0512 with status: READY_FOR_QR
+2026-06-07T06:24:18.814077299Z [2026-06-07T06:24:18.812Z] [INFO] [SKIP] Order ********0512: reason=ALREADY_COMPLETED status=READY_FOR_QR
+2026-06-07T06:24:18.81409552Z [2026-06-07T06:24:18.813Z] [DEBUG] [DEBUG] Processing order ********1021 with status: READY_FOR_QR
+2026-06-07T06:24:19.018441524Z [2026-06-07T06:24:19.018Z] [INFO] [SKIP] Order ********1021: reason=ALREADY_COMPLETED status=READY_FOR_QR
+2026-06-07T06:24:19.018464945Z [2026-06-07T06:24:19.018Z] [INFO] --- Cycle complete: 1 QR sent, 0 SMS flows started ---
+2026-06-07T06:25:19.018639709Z [2026-06-07T06:25:19.018Z] [INFO] --- Starting order processing cycle ---
+2026-06-07T06:25:19.01867084Z [2026-06-07T06:25:19.018Z] [INFO] Surveillance: Running rotation...
+2026-06-07T06:25:19.018701112Z [2026-06-07T06:25:19.018Z] [INFO] Surveillance: Starting login...
+2026-06-07T06:25:21.215583387Z [2026-06-07T06:25:21.215Z] [ERROR] Surveillance: Login failed - page.goto: net::ERR_ADDRESS_UNREACHABLE at https://online.bcc.kz/cashier-cabinet/ru
+2026-06-07T06:25:21.215606138Z Call log:
+2026-06-07T06:25:21.215612289Z   - navigating to "https://online.bcc.kz/cashier-cabinet/ru", waiting until "domcontentloaded"
+2026-06-07T06:25:21.215617119Z 
+2026-06-07T06:25:21.312563564Z [2026-06-07T06:25:21.312Z] [ERROR] Critical error in processing cycle: page.goto: net::ERR_ADDRESS_UNREACHABLE at https://online.bcc.kz/cashier-cabinet/ru
+2026-06-07T06:25:21.312601796Z Call log:
+2026-06-07T06:25:21.312605966Z   - navigating to "https://online.bcc.kz/cashier-cabinet/ru", waiting until "domcontentloaded"
+2026-06-07T06:25:21.312608777Z 
+2026-06-07T06:25:21.312611657Z [2026-06-07T06:25:21.312Z] [ERROR] Critical scheduler failure: Error: page.goto: net::ERR_ADDRESS_UNREACHABLE at https://online.bcc.kz/cashier-cabinet/ru
+2026-06-07T06:25:21.312614377Z Call log:
+2026-06-07T06:25:21.312617207Z   - navigating to "https://online.bcc.kz/cashier-cabinet/ru", waiting until "domcontentloaded"
+2026-06-07T06:25:21.312619867Z 
+2026-06-07T06:25:21.984886995Z [2026-06-07T06:25:21.984Z] [INFO] Dispatcher: Error message sent to admin 7234119362
+2026-06-07T06:25:22.512979203Z [2026-06-07T06:25:22.512Z] [INFO] Surveillance: Browser closed
+2026-06-07T06:25:22.513837208Z [2026-06-07T06:25:22.513Z] [INFO] Dispatcher: Telegram bot stopped

@@ -182,8 +182,8 @@ export class SurveillanceAgent extends EventEmitter {
         timeout: 60000
       });
 
-      // Дополнительное ожидание networkidle после domcontentloaded
-      await this.page!.waitForLoadState('networkidle', { timeout: 60000 });
+      // Ждём появления ключевых элементов (таблица или форма логина)
+      await this.waitForPageReady();
 
       await this.page!.waitForTimeout(500);
       for (let i = 0; i < 3; i++) {
@@ -194,10 +194,8 @@ export class SurveillanceAgent extends EventEmitter {
 
       await this.ensureCorrectUrl();
 
-      // Даем время на загрузку "тяжелого" банка
+      // Даем время на рендеринг после certificate popup
       await this.page!.waitForTimeout(2000);
-      await this.page!.waitForLoadState('networkidle');
-      await this.page!.waitForTimeout(3000);
 
       const pageState = await this.detectPageState();
 
@@ -288,6 +286,21 @@ export class SurveillanceAgent extends EventEmitter {
 
       this.logger.error(`Surveillance: Login failed - ${errorMsg}`);
       throw error;
+    }
+  }
+
+  private async waitForPageReady(): Promise<void> {
+    try {
+      // Ждём появления любого из ключевых элементов: таблица, форма логина, или скелетон
+      await Promise.race([
+        this.page!.waitForSelector('.bcc-table-body', { state: 'visible', timeout: 60000 }),
+        this.page!.waitForSelector('input#username', { state: 'visible', timeout: 60000 }),
+        this.page!.waitForSelector('[class*="skeleton"]', { state: 'visible', timeout: 60000 }),
+        this.page!.waitForSelector('[class*="loading"]', { state: 'visible', timeout: 60000 }),
+      ]);
+      this.logger.info('Surveillance: Page ready - key element detected');
+    } catch {
+      this.logger.warn('Surveillance: No key elements found within 60s, proceeding anyway');
     }
   }
 

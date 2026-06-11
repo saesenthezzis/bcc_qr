@@ -545,7 +545,7 @@ export class DispatcherAgent {
 
   async sendConfirmationAlert(externalId: string, amount: number): Promise<void> {
     let successCount = 0;
-    const caption = `⚠️ ТРЕБУЕТСЯ ПОДТВЕРЖДЕНИЕ\n\nИИН: ${externalId}\nСумма: ${amount.toFixed(2)} тг\n\n---\nНужно подтвердить заявку в личном кабинете: https://online.bcc.kz/cashier-cabinet/ru\nПосле вашего подтверждения бот автоматически пришлет QR-код в этот чат.\n\nАктуальная инструкция — в закрепленном сообщении.\n\nНАПОМИНАНИЕ: все неподтвержденные заявки автоматически аннулируются.`;
+    const caption = `⚠️ ТРЕБУЕТСЯ ПОДТВЕРЖДЕНИЕ\n\nИИН: ${externalId}\nСумма: ${amount.toFixed(2)} тг\n\n---\nНужно подтвердить заявку в личном кабинете: https://online.bcc.kz/cashier-cabinet\nПосле вашего подтверждения бот автоматически пришлет QR-код в этот чат.\n\nАктуальная инструкция — в закрепленном сообщении.\n\nНАПОМИНАНИЕ: все неподтвержденные заявки автоматически аннулируются.`;
 
     for (const { chatId, threadId } of this.getNotificationChats()) {
       try {

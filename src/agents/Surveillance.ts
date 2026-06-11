@@ -65,10 +65,10 @@ export class SurveillanceAgent extends EventEmitter {
     if (!this.page) return;
 
     const currentUrl = this.page.url();
-    const targetUrl = 'https://online.bcc.kz/cashier-cabinet/ru';
+    const targetUrl = 'https://online.bcc.kz/cashier-cabinet';
 
     if (currentUrl.includes('/en') || currentUrl.includes('404')) {
-      this.logger.info(`Surveillance: Wrong URL (${currentUrl}), redirecting to /ru`);
+      this.logger.info(`Surveillance: Wrong URL (${currentUrl}), redirecting to /cashier-cabinet`);
       await this.page.goto(targetUrl, { waitUntil: 'networkidle' });
     }
   }
@@ -177,7 +177,7 @@ export class SurveillanceAgent extends EventEmitter {
 
     try {
       // Patience Mode: ждем полную загрузку страницы
-      await this.page!.goto('https://online.bcc.kz/cashier-cabinet/ru', {
+      await this.page!.goto('https://online.bcc.kz/cashier-cabinet', {
         waitUntil: 'domcontentloaded',
         timeout: 60000
       });

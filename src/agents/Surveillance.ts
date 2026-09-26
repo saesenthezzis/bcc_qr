@@ -1,4 +1,4 @@
-import { chromium, Browser, BrowserContext, Page } from 'playwright';
+import { chromium, Browser, BrowserContext, ElementHandle, Page } from 'playwright';
 import * as path from 'path';
 import * as fs from 'fs';
 import { Logger } from '../utils/Logger';
@@ -903,7 +903,7 @@ export class SurveillanceAgent extends EventEmitter {
 
           // Only after the sidebar is open do we wait for content to appear.
           try {
-            await this.page.waitForSelector('div.bcc-fridge_content', {
+            await this.page.waitForSelector('div.bcc-fridge__content', {
               state: 'visible',
               timeout: 30000
             });
@@ -1584,6 +1584,53 @@ export class SurveillanceAgent extends EventEmitter {
     }
   }
 
+  /**
+   * Visible sidebar that shows this order (its ИИН is in the sidebar text), otherwise null.
+   * A closed sidebar stays in the DOM with the previous order's data, so visibility and ИИН are both required.
+   */
+  private async getOpenSidebarFor(orderId: string): Promise<ElementHandle | null> {
+    if (!this.page) return null;
+    const sidebar = await this.page.$('div.bcc-fridge_open');
+    if (!sidebar || !(await sidebar.isVisible().catch(() => false))) return null;
+    const text = await sidebar.textContent().catch(() => '');
+    return text && text.includes(orderId.trim()) ? sidebar : null;
+  }
+
+  async getInstallmentPeriodFromCurrentSidebar(orderId: string): Promise<string | null> {
+    if (!this.page) return null;
+    try {
+      const sidebar = await this.getOpenSidebarFor(orderId);
+      if (!sidebar) {
+        this.logger.info(`[SIDEBAR] No open sidebar for ${orderId}, installment period not read`);
+        return null;
+      }
+
+      const installmentElement = await this.page.$('div:has(> span:text("Рассрочка")) span.bcc-typography-paragraph_view_medium');
+      if (installmentElement) {
+        const installmentText = await installmentElement.innerText().catch(() => '');
+        const periodMatch = installmentText.match(/(\d+)\s*(месяц|месяца|месяцев|мес\.?)/i);
+        if (periodMatch) {
+          const installmentPeriod = `${periodMatch[1]} месяцев`;
+          this.logger.info(`[SIDEBAR] Installment period extracted from open sidebar: ${installmentPeriod}`);
+          return installmentPeriod;
+        }
+      }
+
+      const sidebarText = await sidebar.textContent().catch(() => '');
+      if (sidebarText) {
+        const periodMatch = sidebarText.match(/Рассрочка[\s\S]*?(\d+)\s*(месяц|месяца|месяцев|мес\.?)/i);
+        if (periodMatch) {
+          const installmentPeriod = `${periodMatch[1]} месяцев`;
+          this.logger.info(`[SIDEBAR] Installment period (fallback) from open sidebar: ${installmentPeriod}`);
+          return installmentPeriod;
+        }
+      }
+    } catch (e) {
+      this.logger.warn(`[SIDEBAR] Failed to get installment from current sidebar: ${e}`);
+    }
+    return null;
+  }
+
   async parseInstallmentPeriodFromSidebar(orderId: string): Promise<string | null> {
     try {
       if (!this.page) {
@@ -1591,13 +1638,21 @@ export class SurveillanceAgent extends EventEmitter {
         return null;
       }
 
-      this.logger.info(`[PROD] Order ${orderId} -> Opening sidebar to parse installment period...`);
-
-      // Use the existing openSidebarForOrder method for consistency
-      const sidebarOpened = await this.openSidebarForOrder(orderId);
-      if (!sidebarOpened) {
-        this.logger.warn(`[PROD] Order ${orderId} -> Failed to open sidebar`);
-        return null;
+      const isAlreadyOpen = (await this.getOpenSidebarFor(orderId)) !== null;
+      if (!isAlreadyOpen) {
+        // A sidebar of another order may still be open — close it so the row click is not blocked
+        const otherSidebarOpen = await this.page.$('div.bcc-fridge_open').then(el => el?.isVisible() ?? false).catch(() => false);
+        if (otherSidebarOpen) {
+          await this.closeSidebar(orderId);
+        }
+        this.logger.info(`[PROD] Order ${orderId} -> Opening sidebar to parse installment period...`);
+        const sidebarOpened = await this.openSidebarForOrder(orderId);
+        if (!sidebarOpened) {
+          this.logger.warn(`[PROD] Order ${orderId} -> Failed to open sidebar`);
+          return null;
+        }
+      } else {
+        this.logger.info(`[PROD] Order ${orderId} -> Sidebar is already open, reading installment period directly`);
       }
 
       // Parse installment period using precise selector
@@ -1752,14 +1807,17 @@ export class SurveillanceAgent extends EventEmitter {
     try {
       this.logger.info(`Surveillance: Opening sidebar for order ${orderId}`);
 
-      // Find the order row by searching for the last 4 digits in any cell of the row
-      const last4 = orderId.slice(-4);
+      // Exact match on the ИИН cell (same as extractOrders/checkSmsConfirmationRequired).
+      // A substring match on the last 4 digits also hit date-group rows ("… 2026") for ИИН ending in a year.
+      // Duplicate ИИН rows: the first (newest) one wins.
+      const targetId = orderId.trim();
       await this.page.waitForSelector('.bcc-table-body__row', { state: 'visible', timeout: 90000 });
       await this.page.waitForTimeout(2000);
       const rows = await this.page.$$('.bcc-table-body__row');
       for (const row of rows) {
-        const rowText = await row.innerText();
-        if (rowText.includes(last4)) {
+        const idCell = await row.$('td');
+        const rowId = idCell ? (await idCell.innerText()).trim() : '';
+        if (rowId === targetId) {
           // Click the row to open the sidebar
           await row.click();
           await this.page.waitForTimeout(2000); // Wait for sidebar to open
@@ -1779,7 +1837,7 @@ export class SurveillanceAgent extends EventEmitter {
         }
       }
 
-      this.logger.warn(`Surveillance: Order ${orderId} not found in table (searched for last 4 digits: ${last4})`);
+      this.logger.warn(`Surveillance: Order ${orderId} not found in table (exact ИИН match)`);
       return false;
     } catch (error) {
       this.logger.error(`Surveillance: Failed to open sidebar for order ${orderId} - ${error}`);

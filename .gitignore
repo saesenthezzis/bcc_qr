@@ -14,10 +14,15 @@ dist/
 # Storage (sessions, screenshots)
 storage/
 *.png
+chat_history
+# Playwright MCP snapshots of the bank cabinet (contain customer personal data)
+.playwright-mcp/
 
 # Logs
 *.log
 npm-debug.log*
+render_logs.txt
+log.txt
 
 # Documentation (internal)
 AGENTS.MD

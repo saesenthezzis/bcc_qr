@@ -195,8 +195,8 @@ export class DispatcherAgent {
           if (activeOrderId) {
             const orderId = activeOrderId.split(':')[0]; // Extract orderId from key format "orderId:chatId"
             this.logger.info(`Dispatcher: 4-digit code without reply — applying to ${orderId}`);
+            // Personal hint to the sender only; the order status itself is posted by handleSmsCodeReply
             await ctx.reply(
-              '✅ Код принят.\n' +
               'ℹ️ Для надёжности используйте кнопку "Ответить" на сообщение с запросом кода.'
             ).catch(() => {});
             await this.handleSmsCodeReply(orderId, text.trim(), ctx);
@@ -715,7 +715,7 @@ export class DispatcherAgent {
         callback(code);
         this.logger.info(`Dispatcher: SMS code received for ${orderId}: ${code} from ${username}`);
         
-        // Update the original message with confirmation
+        // Update the original message with intermediate status
         const replyContext = this.smsCodeReplyContexts.get(this.getReplyContextKey(orderId, ctx.chat.id));
         if (replyContext) {
           try {
@@ -723,17 +723,17 @@ export class DispatcherAgent {
               ctx.chat.id,
               replyContext.messageId,
               undefined,
-              `✅ КОД ВВЕДЕН\n\nИИН: ${orderId}\n\n👤 Код введен пользователем ${username}\n⏰ ${new Date().toISOString()}`
+              `⏳ КОД ПЕРЕДАН В БАНК\n\nИИН: ${orderId}\n\n👤 Код введен пользователем ${username}\n⏰ ${new Date().toISOString()}`
             );
           } catch (editError) {
             this.logger.warn(`Dispatcher: Failed to edit message for ${orderId} - ${editError}`);
           }
         }
 
-        await ctx.reply(`✅ СМС-код принят для заявки ${orderId}`);
+        // Order status goes to the same chats as the final ✅/❌/⚠️ result; input errors stay personal (ctx.reply)
+        await this.sendToAllowedChats(`⏳ Код по заявке ${orderId} принят ботом, проверяем в системе банка...`);
 
-        // Clean up context
-        this.clearReplyContexts(orderId);
+        // Clean up callback for this attempt
         this.smsCodeCallbacks.delete(orderId);
       } else {
         this.logger.warn(`Dispatcher: No callback registered for order ${orderId}`);
@@ -994,6 +994,10 @@ export class DispatcherAgent {
         const existing = await registry.getSmsConfirmation(orderId);
         if (!existing) {
           await registry.registerSmsConfirmation(orderId, amount, status);
+          // registerSmsConfirmation starts at sent_count=0 — count the first request too
+          if (incrementCount) {
+            await registry.updateSmsStatusWithCount(orderId, status);
+          }
           return;
         }
 
@@ -1132,7 +1136,7 @@ export class DispatcherAgent {
             return;
           }
 
-          await syncSmsStatus('WAITING_FOR_USER_ACTION');
+          await syncSmsStatus('WAITING_FOR_USER_ACTION', true);
         }
 
         const decisionRequestSent = await this.sendSmsConfirmationRequest(orderId, amount);
@@ -1187,7 +1191,8 @@ export class DispatcherAgent {
         }
 
         this.logger.info(`Dispatcher: Send SMS button clicked for ${orderId}, waiting for SMS code from user`);
-        await syncSmsStatus('SMS_SENT', true);
+        // sent_count = number of confirmation requests posted to chat; counted once at WAITING_FOR_USER_ACTION
+        await syncSmsStatus('SMS_SENT');
         
         // Step 2: Decision confirmed, now wait for SMS code
         let attemptNumber = 1;
@@ -1317,12 +1322,18 @@ export class DispatcherAgent {
                 const errorCheck = await this.surveillanceAgent.checkSmsErrorModal();
                 if (errorCheck.error || errorCheck.isBlocked) {
                    this.logger.warn(`SMS error modal detected for ${orderId}. Returning ERROR_RECOVERY.`);
+                   // Recovery flow in index.ts posts its own request for a new code (or the "attempts exhausted" alert)
+                   await this.sendToAllowedChats(`❌ Банк не принял СМС-код для заявки ${orderId}.`);
                    await finalizeFlow(SmsFlowStatus.ERROR_RECOVERY);
                    return;
                 }
               }
 
               this.logger.error(`Generic failure to confirm SMS for ${orderId}`);
+              // No new code is accepted after this point, so do not ask the user to re-enter it
+              await this.sendToAllowedChats(
+                `⚠️ Не удалось подтвердить СМС-код для заявки ${orderId} (техническая ошибка на странице банка). Заявка будет перепроверена в следующем цикле.`
+              );
               await finalizeFlow(SmsFlowStatus.TIMEOUT, {
                 smsStatus: 'SMS_TIMEOUT',
               });
@@ -1331,6 +1342,8 @@ export class DispatcherAgent {
 
             // Step 3: Verify success
             this.logger.info(`SMS code submitted and confirmed successfully for ${orderId}`);
+            await this.sendToAllowedChats(`✅ СМС-код принят системой для заявки ${orderId}`);
+            this.clearReplyContexts(orderId);
             await finalizeFlow(SmsFlowStatus.SUCCESS, {
               smsStatus: 'SMS_CONFIRMED',
             });

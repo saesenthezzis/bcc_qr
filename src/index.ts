@@ -75,6 +75,16 @@ const GRACEFUL_RESTART_HOURS = 3;
 const BANK_CONFIRM_POLL_MS = 10 * 1000;
 const BANK_CONFIRM_TIMEOUT_MS = 3 * 60 * 1000;
 
+// sent_count = number of SMS confirmation requests posted to chat (incremented once per flow in Dispatcher)
+const SMS_MAX_REQUESTS = 5;
+const FINAL_SMS_STATUSES: SmsStatus[] = [
+  'SMS_CONFIRMED',
+  'USER_REFUSED_SMS',
+  'SMS_BLOCKED',
+  'COMPLETED_EXTERNALLY',
+  'SMS_BUTTON_NOT_FOUND',
+];
+
 // Global monitoring pause flag
 let isMonitoringPaused: boolean = false;
 let isProcessingSms: boolean = false;
@@ -137,6 +147,13 @@ async function processSmsConfirmation(
       if (rec && incompleteStatuses.includes(rec.status)) {
         await registry.updateSmsStatus(orderId, 'SMS_TIMEOUT');
         Logger.warn(`[SMS] Auto-updated status to SMS_TIMEOUT for ${orderId}`);
+      }
+
+      // Request limit reached: processOrders stops starting new flows, notify once.
+      // Final statuses (confirmed, refused, blocked, QR sent) are left untouched.
+      if (rec && rec.sent_count >= SMS_MAX_REQUESTS && !FINAL_SMS_STATUSES.includes(rec.status)) {
+        await dispatcher.sendToAllowedChats(`⚠️ По заявке ${orderId} отправлено ${rec.sent_count} запросов СМС-подтверждения без результата. Ожидание прекращено.`);
+        Logger.info(`[SMS] Limit of ${SMS_MAX_REQUESTS} requests reached for ${orderId}, halted SMS notifications`);
       }
     } catch (e) {
       Logger.error(`[SMS] Failed to auto-update status in finally: ${e}`);
@@ -269,13 +286,6 @@ async function processOrders(): Promise<void> {
 
     let processedCount = 0;
     let smsCount = 0;
-    const finalSmsStatuses: SmsStatus[] = [
-      'SMS_CONFIRMED',
-      'USER_REFUSED_SMS',
-      'SMS_BLOCKED',
-      'COMPLETED_EXTERNALLY',
-      'SMS_BUTTON_NOT_FOUND',
-    ];
 
     for (const order of orders) {
       try {
@@ -332,9 +342,11 @@ async function processOrders(): Promise<void> {
           }
 
           const smsRec = await registry.getSmsConfirmation(order.external_id, order.amount);
-          if (smsRec && finalSmsStatuses.includes(smsRec.status)) {
-            Logger.debug(`[SMS] Order ${order.external_id} has final SMS status ${smsRec.status}, skip`);
-            continue;
+          if (smsRec) {
+            if (FINAL_SMS_STATUSES.includes(smsRec.status) || smsRec.sent_count >= SMS_MAX_REQUESTS) {
+              Logger.debug(`[SMS] Order ${order.external_id} has final status (${smsRec.status}) or reached request limit (${smsRec.sent_count}/${SMS_MAX_REQUESTS}), skip`);
+              continue;
+            }
           }
 
           // Step 6: Open sidebar and check for SMS button

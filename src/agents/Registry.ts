@@ -93,29 +93,51 @@ export class RegistryAgent {
     }
   }
 
-  async reserveOrder(externalId: string, amount: number): Promise<boolean> {
+  /**
+   * Atomically claims an order for QR delivery: PENDING/READY_FOR_QR -> PROCESSING.
+   * The conditional UPDATE lets exactly one concurrent caller win; any DB error means "do not send".
+   */
+  async claimOrderForQr(externalId: string, amount: number): Promise<boolean> {
     try {
-      const { error } = await this.client
+      const { error: insertError } = await this.client
         .from('processed_orders')
         .upsert({
           external_id: externalId,
           amount: amount,
-          status: 'PROCESSING',
+          status: 'PENDING',
         }, {
           onConflict: 'external_id,amount',
           ignoreDuplicates: true,
         });
 
-      if (error) {
-        this.logger.error(`Registry reserveOrder error: ${error.message}`);
+      if (insertError) {
+        this.logger.error(`Registry claimOrderForQr insert error: ${insertError.message}`);
         return false;
       }
 
-      this.logger.info(`Order ${externalId} (amount=${amount}) reserved with status PROCESSING`);
+      const { data, error } = await this.client
+        .from('processed_orders')
+        .update({ status: 'PROCESSING' })
+        .eq('external_id', externalId)
+        .eq('amount', amount)
+        .in('status', ['PENDING', 'READY_FOR_QR'])
+        .select('external_id');
+
+      if (error) {
+        this.logger.error(`Registry claimOrderForQr update error: ${error.message}`);
+        return false;
+      }
+
+      if (!data || data.length === 0) {
+        this.logger.info(`Order ${externalId} (amount=${amount}) already claimed or completed`);
+        return false;
+      }
+
+      this.logger.info(`Order ${externalId} (amount=${amount}) claimed for QR (PROCESSING)`);
       return true;
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Failed to reserve order ${externalId}: ${errorMsg}`);
+      this.logger.error(`Failed to claim order ${externalId}: ${errorMsg}`);
       return false;
     }
   }

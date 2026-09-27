@@ -705,9 +705,9 @@ export class DispatcherAgent {
       const username = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name || 'сотрудник';
       this.logger.info(`Dispatcher: SMS code received for ${orderId} from ${username}`);
       this.smsCodeCallbacks.delete(orderId);
-      callback(code);
-      // One status for everybody: the request message itself turns into "checking"
+      // One status for everybody: the request message turns into "checking" before the next request can replace it
       await this.updateCountdownMessage(orderId, BotText.checkingCode(orderId, username));
+      callback(code);
     } catch (error) {
       this.logger.error(`Dispatcher: Failed to handle SMS code reply for ${orderId} - ${error}`);
       await ctx.reply('❌ Не получилось принять код, пришлите ещё раз.').catch(() => {});
@@ -889,7 +889,7 @@ export class DispatcherAgent {
     const registry = this.surveillanceAgent?.getRegistry();
     if (!registry) return;
     try {
-      const existing = await registry.getSmsConfirmation(orderId, amount);
+      const existing = await registry.getSmsConfirmation(orderId);
       if (!existing) await registry.registerSmsConfirmation(orderId, amount, status);
       if (incrementCount) {
         await registry.updateSmsStatusWithCount(orderId, status);
@@ -910,6 +910,7 @@ export class DispatcherAgent {
         this.updateDecisionMessage(orderId, BotText.askSendSms(orderId, amount, timeLeft), true)
       );
       if (answer === null) await this.updateDecisionMessage(orderId, BotText.decisionExpired, false);
+      if (answer === 'CONFIRMED') await this.updateDecisionMessage(orderId, BotText.sendingSms(orderId), false);
       return answer;
     } finally {
       this.awaitingDecision.delete(orderId);

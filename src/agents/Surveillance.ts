@@ -1164,7 +1164,7 @@ export class SurveillanceAgent extends EventEmitter {
         this.logger.warn(`Surveillance: Confirm click failed for ${orderId} - ${error}`);
       });
 
-      return this.logSmsCodeResult(orderId, (await this.waitSmsCodeOutcome(20000)) ?? 'WRONG');
+      return this.logSmsCodeResult(orderId, (await this.waitSmsCodeOutcome(15000)) ?? 'WRONG');
     } catch (error) {
       this.logger.error(`Surveillance: Failed to submit SMS code for ${orderId} - ${error}`);
       return 'FAILED';

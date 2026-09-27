@@ -584,6 +584,23 @@ export class DispatcherAgent {
     }
   }
 
+  /** Send a debug screenshot to admin chat only. */
+  async sendToAdminChat(photoBuffer: Buffer, caption: string, filename: string): Promise<void> {
+    if (!this.adminChatId) {
+      this.logger.warn('Dispatcher: ADMIN_ID not configured, debug screenshot skipped');
+      return;
+    }
+    try {
+      await this.bot.telegram.sendPhoto(this.adminChatId, {
+        source: photoBuffer,
+        filename,
+      }, { caption });
+      this.logger.debug(`Dispatcher: Debug screenshot sent to admin (${caption})`);
+    } catch (sendError) {
+      await this.handleTelegramError(sendError, `sendToAdminChat ${caption}`);
+    }
+  }
+
   async stop(): Promise<void> {
     await this.bot.stop();
     this.logger.info('Dispatcher: Telegram bot stopped');

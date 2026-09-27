@@ -60,6 +60,16 @@ surveillance.on('smsRequired', async ({ screenshot, timestamp }) => {
   await dispatcher.sendSmsRequest(screenshot, timestamp);
 });
 
+surveillance.on('debugScreenshot', async ({ label, buffer, timestamp }) => {
+  if (!dispatcher['adminChatId']) return;
+  try {
+    const filename = `debug_${label}_${timestamp.replace(/[:.]/g, '-')}.png`;
+    await dispatcher.sendToAdminChat(buffer, `🔍 ${label}`, filename);
+  } catch (e) {
+    Logger.warn(`Debug screenshot send failed for ${label}: ${e}`);
+  }
+});
+
 const CHECK_INTERVAL_MS = (parseInt(process.env.CHECK_INTERVAL_MINUTES || '1') * 60 * 1000);
 const GRACEFUL_RESTART_HOURS = 3;
 const BANK_CONFIRM_POLL_MS = 10 * 1000;

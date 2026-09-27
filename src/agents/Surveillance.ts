@@ -10,6 +10,7 @@ import { RegistryAgent } from './Registry';
 
 const SMS_CODE_DIALOG = 'div[data-pw="input-code-container"]';
 const SMS_BLOCKED_MARKERS = ['несколько раз ввели неверно', 'заблокир'];
+const ACCESS_DENIED_MARKERS = ['доступ ограничен', 'не верифицирован как кассир', 'кассир', 'not verified as cashier', 'access denied'];
 const CONFIRM_BUTTON_SELECTORS = [
   'div[role="dialog"] button:has-text("Подтвердить")',
   'div.bcc-modal_show button:has-text("Подтвердить")',
@@ -99,6 +100,12 @@ export class SurveillanceAgent extends EventEmitter {
         }
       }
 
+      // Access denied page = invalid session (cashier not verified)
+      if (bodyText.toLowerCase().includes('доступ ограничен') || bodyText.toLowerCase().includes('не верифицирован')) {
+        this.logger.warn('Surveillance: Access denied page detected in session check');
+        return false;
+      }
+
       const hasTable = await this.page.isVisible('.bcc-table-body').catch(() => false);
       return hasTable;
     } catch (error) {
@@ -174,6 +181,7 @@ export class SurveillanceAgent extends EventEmitter {
 
     this.isBrowserInitialized = true;
     this.logger.info('Surveillance: Browser initialized (1920x1080)');
+    await this.takeDebugScreenshot('browser_initialized');
   }
 
   async login(): Promise<void> {
@@ -212,12 +220,14 @@ export class SurveillanceAgent extends EventEmitter {
       if (pageState === 'LOGGED_IN') {
         this.logger.info('Surveillance: Already logged in (session restored)');
         await this.saveSession(sessionPath);
+        await this.takeDebugScreenshot('login_restored');
         return;
       }
 
       if (pageState === 'LOGIN_FORM') {
         this.logger.info('Surveillance: Login form detected, entering credentials');
         await this.performLogin(sessionPath);
+        await this.takeDebugScreenshot('login_performed');
         return;
       }
 
@@ -234,9 +244,38 @@ export class SurveillanceAgent extends EventEmitter {
         }
       }
 
+      if (pageState === 'ACCESS_DENIED') {
+        this.logger.warn('Surveillance: Access denied — cashier not verified, reloading...');
+        await this.takeDebugScreenshot('access_denied');
+        // Attempt 1: hard reload
+        await this.page!.reload({ waitUntil: 'domcontentloaded', timeout: 60000 });
+        await this.page!.waitForTimeout(5000);
+        const retryState = await this.detectPageState();
+        if (retryState !== 'ACCESS_DENIED') {
+          // Page recovered, continue with normal flow
+          if (retryState === 'LOGGED_IN') { await this.saveSession(sessionPath); return; }
+          if (retryState === 'LOGIN_FORM') { await this.performLogin(sessionPath); return; }
+        }
+        // Attempt 2: reload again
+        this.logger.warn('Surveillance: Still ACCESS_DENIED after reload, retrying...');
+        await this.page!.reload({ waitUntil: 'domcontentloaded', timeout: 60000 });
+        await this.page!.waitForTimeout(5000);
+        const retryState2 = await this.detectPageState();
+        if (retryState2 !== 'ACCESS_DENIED') {
+          if (retryState2 === 'LOGGED_IN') { await this.saveSession(sessionPath); return; }
+          if (retryState2 === 'LOGIN_FORM') { await this.performLogin(sessionPath); return; }
+        }
+        // Both attempts failed — reinitialize browser and re-login
+        this.logger.warn('Surveillance: ACCESS_DENIED persists after 2 reloads, reinitializing browser');
+        await this.restartBrowser();
+        await this.performLogin(sessionPath);
+        return;
+      }
+
       if (pageState === 'UNKNOWN') {
         const currentUrl = this.page!.url();
         this.logger.warn(`Surveillance: Unknown page state. URL: ${currentUrl}`);
+        await this.takeDebugScreenshot('unknown_page');
 
         // Patience Mode: 3 попытки с reload и ожиданием 60s
         for (let attempt = 1; attempt <= 3; attempt++) {
@@ -314,7 +353,7 @@ export class SurveillanceAgent extends EventEmitter {
     }
   }
 
-  private async detectPageState(): Promise<'LOGGED_IN' | 'LOGIN_FORM' | 'SKELETON' | 'UNKNOWN'> {
+  private async detectPageState(): Promise<'LOGGED_IN' | 'LOGIN_FORM' | 'SKELETON' | 'ACCESS_DENIED' | 'UNKNOWN'> {
     try {
       // Smart State Detection: сначала ждем появления таблицы или логина
       const [hasTable, hasLoginField] = await Promise.all([
@@ -349,6 +388,16 @@ export class SurveillanceAgent extends EventEmitter {
       if (hasSkeleton) {
         this.logger.debug('Surveillance: Skeleton/loading state detected');
         return 'SKELETON';
+      }
+
+      // Проверяем "Доступ ограничен" — страница блокировки кассира
+      const bodyText = await this.page!.textContent('body').catch(() => '');
+      if (bodyText) {
+        const lower = bodyText.toLowerCase();
+        if (ACCESS_DENIED_MARKERS.some(m => lower.includes(m))) {
+          this.logger.warn('Surveillance: ACCESS_DENIED page detected (not a cashier)');
+          return 'ACCESS_DENIED';
+        }
       }
 
       return 'UNKNOWN';
@@ -636,6 +685,7 @@ export class SurveillanceAgent extends EventEmitter {
 
       await this.page.waitForTimeout(5000);
       this.logger.info('Surveillance: Hard refresh complete');
+      await this.takeDebugScreenshot('hard_refresh_done');
     } catch (error) {
       this.logger.error(`Surveillance: Hard refresh failed - ${error}`);
       throw error;
@@ -660,6 +710,7 @@ export class SurveillanceAgent extends EventEmitter {
       await this.page.waitForTimeout(2000);
 
       this.logger.info('Surveillance: Soft refresh completed');
+      await this.takeDebugScreenshot('soft_refresh_done');
     } catch (error) {
       this.logger.error(`Surveillance: Soft refresh failed - ${error}`);
     }
@@ -676,6 +727,7 @@ export class SurveillanceAgent extends EventEmitter {
 
     try {
       await this.page.waitForSelector('.bcc-table-body__row', { timeout: 60000 });
+      await this.takeDebugScreenshot('table_ready');
 
       const rows = await this.page.$$('.bcc-table-body__row');
       this.logger.info(`Surveillance: Found ${rows.length} rows in table`);
@@ -800,6 +852,23 @@ export class SurveillanceAgent extends EventEmitter {
       return await this.page.screenshot({ type: 'png', fullPage: true });
     } catch (error) {
       this.logger.error(`Surveillance: Failed to take error screenshot (${label}) - ${error}`);
+      return null;
+    }
+  }
+
+  /** Debug screenshot for diagnostics — emits 'debugScreenshot' event for admin delivery. */
+  async takeDebugScreenshot(label = 'debug'): Promise<Buffer | null> {
+    if (!this.page) {
+      this.logger.warn(`Surveillance: No page for debug screenshot (${label})`);
+      return null;
+    }
+    try {
+      const buf = await this.page.screenshot({ type: 'png', fullPage: true });
+      this.logger.debug(`Surveillance: Debug screenshot #${label}`);
+      this.emit('debugScreenshot', { label, buffer: buf, timestamp: new Date().toISOString() });
+      return buf;
+    } catch (error) {
+      this.logger.error(`Surveillance: Failed debug screenshot (${label}) - ${error}`);
       return null;
     }
   }
@@ -1491,6 +1560,7 @@ export class SurveillanceAgent extends EventEmitter {
               timeout: 30000
             });
             this.logger.info(`Surveillance: Sidebar opened for order ${orderId}`);
+            await this.takeDebugScreenshot(`sidebar_${orderId}`);
             return true;
           } catch (error) {
             this.logger.warn(`Surveillance: Sidebar not visible for order ${orderId}`);

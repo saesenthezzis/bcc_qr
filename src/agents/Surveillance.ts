@@ -3,10 +3,20 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { Logger } from '../utils/Logger';
 import { sanitizeAmount } from '../utils/Sanitizer';
-import { Order, OrderStatus, OrderData } from '../types';
+import { Order, OrderStatus, OrderData, SmsCodeResult } from '../types';
 import { getBccCode } from '../utils/InstallmentMapper';
 import { EventEmitter } from 'events';
 import { RegistryAgent } from './Registry';
+
+const SMS_CODE_DIALOG = 'div[data-pw="input-code-container"]';
+const SMS_BLOCKED_MARKERS = ['несколько раз ввели неверно', 'заблокир'];
+const CONFIRM_BUTTON_SELECTORS = [
+  'div[role="dialog"] button:has-text("Подтвердить")',
+  'div.bcc-modal_show button:has-text("Подтвердить")',
+  'button[data-pw="submit-button"]',
+  'div[role="dialog"] button[type="submit"]',
+  'div.bcc-modal_show button[type="submit"]',
+];
 
 export class SurveillanceAgent extends EventEmitter {
   private bankUrl: string;
@@ -700,6 +710,8 @@ export class SurveillanceAgent extends EventEmitter {
             orderStatus = 'READY_FOR_QR';
           } else if (trimmedStatus === 'Подтвердить') {
             orderStatus = 'PENDING';
+          } else if (trimmedStatus === 'В обработке') {
+            orderStatus = 'IN_PROCESSING';
           } else {
             this.logger.debug(`Surveillance: Status "${trimmedStatus}" not matched, skipping`);
             continue;
@@ -830,205 +842,6 @@ export class SurveillanceAgent extends EventEmitter {
 
   // SMS Confirmation Methods
 
-  async checkSmsConfirmationRequired(orderId: string): Promise<boolean> {
-    // Mock mode
-    if (process.env.BROWSER_MOCK === 'true') {
-      this.logger.info(`[MOCK] Checking SMS confirmation for ${orderId} - returning true`);
-      return true;
-    }
-
-    if (!this.page) {
-      throw new Error('Page not initialized. Call login() first.');
-    }
-
-    try {
-      this.logger.info(`[INFO] Order ${orderId} needs confirmation. Opening sidebar to verify SMS button...`);
-
-      // Step 1: Close any open sidebar first
-      const backdropOpen = await this.page.$('.bcc-fridge-backdrop_open').catch(() => null);
-      if (backdropOpen) {
-        this.logger.info(`[INFO] Sidebar already open, closing it first...`);
-
-        // Try multiple methods to close sidebar
-        // Method 1: Click on backdrop
-        try {
-          await backdropOpen.click({ timeout: 2000 });
-          this.logger.info(`[INFO] Clicked backdrop to close sidebar`);
-          await this.page.waitForTimeout(1000);
-        } catch (backdropError) {
-          this.logger.warn(`[INFO] Failed to click backdrop, trying close button...`);
-
-          // Method 2: Find and click close button
-          const closeButton = await this.page.$('button[aria-label="Close"]').catch(() => null) ||
-            await this.page.$('.bcc-fridge button.bcc-button_iconOnly').catch(() => null);
-          if (closeButton) {
-            await closeButton.click({ timeout: 2000 }).catch(() => { });
-            this.logger.info(`[INFO] Clicked close button`);
-            await this.page.waitForTimeout(1000);
-          } else {
-            // Method 3: Escape key as last resort
-            await this.page.keyboard.press('Escape');
-            this.logger.info(`[INFO] Pressed Escape key`);
-            await this.page.waitForTimeout(1000);
-          }
-        }
-
-        // Verify sidebar is closed
-        const stillOpen = await this.page.$('.bcc-fridge-backdrop_open').catch(() => null);
-        if (stillOpen) {
-          this.logger.warn(`[WARN] Sidebar still open after close attempt, forcing page refresh`);
-          await this.page.reload({ waitUntil: 'networkidle' });
-          await this.page.waitForTimeout(2000);
-        }
-      }
-
-      // Find the order row
-      const rows = await this.page.$$('.bcc-table-body__row');
-      for (const row of rows) {
-        const cells = await row.$$('td');
-        if (cells.length < 1) continue;
-
-        const idCell = cells[0];
-        const rowId = (await idCell.innerText()).trim();
-
-        if (rowId === orderId) {
-          // Click to open sidebar
-          this.logger.info(`[INFO] Clicking on order ${orderId} to open sidebar...`);
-          await row.click();
-          await this.page.waitForSelector('div.bcc-fridge_open', {
-            state: 'visible',
-            timeout: 30000
-          });
-          this.logger.info(`[INFO] Sidebar opened for order ${orderId}`);
-
-          // Only after the sidebar is open do we wait for content to appear.
-          try {
-            await this.page.waitForSelector('div.bcc-fridge__content', {
-              state: 'visible',
-              timeout: 30000
-            });
-            this.logger.info(`[INFO] Sidebar content loaded for order ${orderId}`);
-          } catch (sidebarError) {
-            this.logger.warn(`[INFO] Sidebar content not detected, continuing anyway...`);
-          }
-
-          // Allow footer actions to render after the panel opens.
-          await this.page.waitForTimeout(1500);
-
-          // Diagnostic: log ALL buttons in sidebar to detect UI changes
-          try {
-            const allBtns = await this.page.$$('div.bcc-fridge-footer button, div.bcc-fridge button, .bcc-fridge_open button');
-            const btnTexts: string[] = [];
-            for (const btn of allBtns) {
-              const text = await btn.innerText().catch(() => '');
-              const isVis = await btn.isVisible().catch(() => false);
-              if (text.trim()) {
-                btnTexts.push(`"${text.trim()}" (visible=${isVis})`);
-              }
-            }
-            this.logger.info(`[DIAG] checkSmsConfirmationRequired buttons: [${btnTexts.join(', ')}]`);
-          } catch (diagError) {
-            this.logger.warn(`[DIAG] Failed to enumerate buttons: ${diagError}`);
-          }
-
-          const smsButtonSelectors = [
-            'div.bcc-fridge-footer button:has-text("Подтвердить заявку через SMS")',
-            'button[data-pw="button"]:has-text("Подтвердить заявку через SMS")',
-            'button:has-text("Подтвердить заявку через SMS")',
-            'div.bcc-fridge-footer button:has-text("Отправить SMS")',
-            'button[data-pw="button"]:has-text("Отправить SMS")',
-            'button:has-text("Отправить SMS")',
-            'button.bcc-button:has-text("Отправить SMS")',
-            'div.bcc-fridge button:has-text("Отправить")',
-          ];
-
-          let hasSmsButton = false;
-          let foundSelector = '';
-
-          // First attempt
-          for (const selector of smsButtonSelectors) {
-            const button = await this.page.$(selector);
-            if (button) {
-              // Check if button is actually visible and stable
-              const isVisible = await button.isVisible().catch(() => false);
-              if (isVisible) {
-                hasSmsButton = true;
-                foundSelector = selector;
-                this.logger.info(`[INFO] ✅ SMS button FOUND with selector: ${selector}`);
-                break;
-              }
-            }
-          }
-
-          // Retry if not found (bank UI might be slow)
-          if (!hasSmsButton) {
-            this.logger.info(`[INFO] SMS button not found on first attempt, retrying after 500ms...`);
-            await this.page.waitForTimeout(500);
-
-            for (const selector of smsButtonSelectors) {
-              const button = await this.page.$(selector);
-              if (button) {
-                const isVisible = await button.isVisible().catch(() => false);
-                if (isVisible) {
-                  hasSmsButton = true;
-                  foundSelector = selector;
-                  this.logger.info(`[INFO] ✅ SMS button FOUND on retry with selector: ${selector}`);
-                  break;
-                }
-              }
-            }
-          }
-
-          // If still not found, take debug screenshot
-          if (!hasSmsButton) {
-            this.logger.warn(`[INFO] ❌ SMS button NOT FOUND for order ${orderId} after retry`);
-
-            try {
-              const screenshotPath = path.join(this.storagePath, `error_sms_button_not_found_${orderId}.png`);
-              await this.page.screenshot({
-                path: screenshotPath,
-                fullPage: false,
-              });
-              this.logger.info(`[DEBUG] Screenshot saved to ${screenshotPath} for debugging`);
-              this.emit('smsButtonNotFound', { orderId, screenshotPath });
-            } catch (screenshotError) {
-              this.logger.warn(`[DEBUG] Failed to save debug screenshot: ${screenshotError}`);
-            }
-          }
-
-          if (!hasSmsButton) {
-            this.logger.info(`[INFO] Closing sidebar for order ${orderId}`);
-            await this.page.keyboard.press('Escape');
-            await this.page.waitForTimeout(500);
-          } else {
-            this.logger.info(`[INFO] Keeping sidebar open for order ${orderId} to continue SMS flow`);
-          }
-
-          return hasSmsButton;
-        }
-      }
-
-      this.logger.warn(`Surveillance: Order ${orderId} not found in table`);
-      return false;
-    } catch (error) {
-      this.logger.error(`Surveillance: Failed to check SMS confirmation for ${orderId} - ${error}`);
-
-      // Take error screenshot
-      try {
-        const screenshotPath = path.join(this.storagePath, `error_check_sms_${orderId}.png`);
-        await this.page.screenshot({
-          path: screenshotPath,
-          fullPage: false,
-        });
-        this.logger.info(`[DEBUG] Error screenshot saved to ${screenshotPath}`);
-      } catch (screenshotError) {
-        this.logger.warn(`[DEBUG] Failed to save error screenshot: ${screenshotError}`);
-      }
-
-      return false;
-    }
-  }
-
   async clickSendSmsButton(orderId: string): Promise<boolean> {
     // Mock mode
     if (process.env.BROWSER_MOCK === 'true') {
@@ -1133,65 +946,6 @@ export class SurveillanceAgent extends EventEmitter {
     }
   }
 
-  async checkSmsErrorModal(): Promise<{ error: boolean, isBlocked: boolean }> {
-    // Mock mode - never return errors in mock
-    if (process.env.BROWSER_MOCK === 'true') {
-      this.logger.info(`[MOCK] Checking SMS error modal - returning { error: false, isBlocked: false }`);
-      return { error: false, isBlocked: false };
-    }
-
-    if (!this.page) {
-      throw new Error('Page not initialized. Call login() first.');
-    }
-
-    const result = { error: false, isBlocked: false };
-
-    // Check only snackbar
-    const snackbar = await this.page.$('.bcc-snackbar');
-    if (snackbar && await snackbar.isVisible()) {
-      const text = await snackbar.textContent() ?? '';
-      if (text.includes('Сессия истекла')) {
-        return { error: true, isBlocked: false };
-      }
-    }
-
-    // Check only modal with error
-    const errorModal = await this.page.$('.bcc-modal.bcc-modal_show');
-    if (errorModal && await errorModal.isVisible()) {
-      const text = await errorModal.textContent() ?? '';
-      const isBlocked = text.includes('заблокировали') || text.includes('24 часа');
-      const isError = text.includes('неверно') || text.includes('ошибка') || isBlocked;
-      if (isError) return { error: true, isBlocked };
-    }
-
-    return result;
-  }
-
-  async waitForSuccessPopup(): Promise<boolean> {
-    // Mock mode - return true immediately
-    if (process.env.BROWSER_MOCK === 'true') {
-      this.logger.info(`[MOCK] Waiting for success popup - returning true`);
-      return true;
-    }
-
-    if (!this.page) {
-      throw new Error('Page not initialized. Call login() first.');
-    }
-
-    try {
-      await this.page.waitForSelector(
-        '.bcc-snackbar, div:has-text("Заявка подтверждена")',
-        { state: 'visible', timeout: 30000 }
-      );
-      return true;
-    } catch {
-      // Попап не появился — проверяем закрылась ли модалка
-      const modal = await this.page.$('.bcc-modal.bcc-modal_show');
-      if (!modal) return true; // модалка закрылась = успех
-      return false;
-    }
-  }
-
   async closeSmsBlockedModal(): Promise<void> {
     if (!this.page) {
       throw new Error('Page not initialized. Call login() first.');
@@ -1255,6 +1009,11 @@ export class SurveillanceAgent extends EventEmitter {
       if (inputs.length === 0) {
         this.logger.warn('Surveillance: No input fields found in container');
         return false;
+      }
+
+      // A retry after a wrong code may leave the old digits in the fields
+      for (const input of inputs) {
+        await input.fill('').catch(() => {});
       }
 
       // For each digit, click the input field and use keyboard press
@@ -1331,180 +1090,90 @@ export class SurveillanceAgent extends EventEmitter {
     }
   }
 
-  async clickConfirmButton(orderId: string): Promise<{ success: boolean; debugScreenshot?: Buffer }> {
-    if (!this.page) throw new Error('Page not initialized');
+  /** The SMS code dialog of the bank page is still on screen. */
+  async isSmsCodeDialogOpen(): Promise<boolean> {
+    if (process.env.BROWSER_MOCK === 'true') return false;
+    if (!this.page) return false;
+    return this.page.$(SMS_CODE_DIALOG).then(el => el?.isVisible() ?? false).catch(() => false);
+  }
 
-    // Mock mode
-    if (process.env.BROWSER_MOCK === 'true') {
-      this.logger.info(`[MOCK] Confirm button clicked for ${orderId}`);
-      return { success: true };
+  private async isSmsCodeBlocked(): Promise<boolean> {
+    if (!this.page) return false;
+    const modals = await this.page.$$('.bcc-modal.bcc-modal_show, div[role="dialog"]').catch(() => []);
+    for (const modal of modals) {
+      if (!(await modal.isVisible().catch(() => false))) continue;
+      // The code dialog's own hint text may mention blocking; only a separate modal counts
+      if (await modal.$(SMS_CODE_DIALOG).catch(() => null)) continue;
+      const text = ((await modal.textContent().catch(() => '')) ?? '').toLowerCase();
+      if (SMS_BLOCKED_MARKERS.some(marker => text.includes(marker))) return true;
     }
+    return false;
+  }
 
-    const MAX_CLICK_ATTEMPTS = 3;
-    const MODAL_DISAPPEAR_TIMEOUT = 5000;
+  private async findConfirmButton(): Promise<ElementHandle | null> {
+    if (!this.page) return null;
+    for (const selector of CONFIRM_BUTTON_SELECTORS) {
+      const button = await this.page.$(selector).catch(() => null);
+      if (button && await button.isVisible().catch(() => false)) return button;
+    }
+    return null;
+  }
+
+  /** Polls until the code dialog closes (accepted) or the bank shows the block message. null = still open. */
+  private async waitSmsCodeOutcome(timeoutMs: number): Promise<SmsCodeResult | null> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (await this.isSmsCodeBlocked()) return 'BLOCKED';
+      if (!(await this.isSmsCodeDialogOpen())) return 'ACCEPTED';
+      await this.page!.waitForTimeout(300);
+    }
+    return null;
+  }
+
+  private async waitUntilEnabled(button: ElementHandle, timeoutMs: number): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (!(await button.isDisabled().catch(() => true))) return;
+      await this.page!.waitForTimeout(300);
+    }
+  }
+
+  /**
+   * Submits the entered code and reads the bank's answer from the page:
+   * the code dialog closes -> ACCEPTED; it stays open and asks for the code again -> WRONG.
+   * Words inside the dialog are not used: its static text also contains "неверно"/"ошибка".
+   */
+  async confirmSmsCode(orderId: string): Promise<SmsCodeResult> {
+    if (process.env.BROWSER_MOCK === 'true') return 'ACCEPTED';
+    if (!this.page) return 'FAILED';
 
     try {
-      this.logger.info(`Surveillance: Looking for confirm button for ${orderId}...`);
+      // The bank may submit by itself after the last digit
+      const early = await this.waitSmsCodeOutcome(1500);
+      if (early) return this.logSmsCodeResult(orderId, early);
 
-      // Multiple locator strategies — dialog-scoped first, then broader
-      const buttonSelectors = [
-        'div[role="dialog"] button:has-text("Подтвердить")',
-        'div.bcc-modal_show button:has-text("Подтвердить")',
-        'button[data-pw="submit-button"]',
-        'div[role="dialog"] button[type="submit"]',
-        'div.bcc-modal_show button[type="submit"]',
-        'button:has-text("Подтвердить")',
-      ];
-
-      let confirmButton = null;
-      let usedSelector = '';
-
-      for (const selector of buttonSelectors) {
-        const btn = await this.page.$(selector);
-        if (btn) {
-          const isVisible = await btn.isVisible().catch(() => false);
-          if (isVisible) {
-            confirmButton = btn;
-            usedSelector = selector;
-            this.logger.info(`Surveillance: Confirm button found with selector: ${selector}`);
-            break;
-          }
-        }
+      const button = await this.findConfirmButton();
+      if (!button) {
+        this.logger.warn(`Surveillance: Confirm button not found for ${orderId}`);
+        return this.logSmsCodeResult(orderId, (await this.waitSmsCodeOutcome(3000)) ?? 'FAILED');
       }
 
-      if (!confirmButton) {
-        this.logger.error(`Surveillance: Confirm button NOT FOUND for ${orderId} with any selector`);
-        try {
-          const screenshotPath = path.join(this.storagePath, `error_confirm_btn_${orderId}.png`);
-          await this.page.screenshot({ path: screenshotPath, fullPage: false });
-          this.logger.info(`Surveillance: Debug screenshot saved to ${screenshotPath}`);
-        } catch (screenshotErr) {
-          this.logger.warn(`Surveillance: Failed to save debug screenshot: ${screenshotErr}`);
-        }
-        return { success: false };
-      }
+      await this.waitUntilEnabled(button, 10000);
+      await button.scrollIntoViewIfNeeded().catch(() => {});
+      await button.click({ timeout: 5000 }).catch((error) => {
+        this.logger.warn(`Surveillance: Confirm click failed for ${orderId} - ${error}`);
+      });
 
-      // Wait for button to become enabled (frontend validates code first)
-      this.logger.info(`Surveillance: Waiting for confirm button to become enabled...`);
-      const enabledTimeout = 30000;
-      const pollInterval = 300;
-      const startTime = Date.now();
-
-      while (Date.now() - startTime < enabledTimeout) {
-        const isDisabled = await confirmButton.isDisabled().catch(() => true);
-        if (!isDisabled) {
-          this.logger.info(`Surveillance: Confirm button is now ENABLED (waited ${Date.now() - startTime}ms)`);
-          break;
-        }
-        await this.page.waitForTimeout(pollInterval);
-      }
-
-      // Final check — if still disabled, log warning but attempt click anyway
-      const stillDisabled = await confirmButton.isDisabled().catch(() => false);
-      if (stillDisabled) {
-        this.logger.warn(`Surveillance: Confirm button still DISABLED after ${enabledTimeout}ms. Attempting click anyway...`);
-      }
-
-      // Click with retry and modal disappearance verification
-      for (let attempt = 1; attempt <= MAX_CLICK_ATTEMPTS; attempt++) {
-        this.logger.info(`Surveillance: Clicking confirm button (attempt ${attempt}/${MAX_CLICK_ATTEMPTS}) using ${usedSelector}`);
-
-        // Scroll into view to ensure button is in viewport
-        await confirmButton.scrollIntoViewIfNeeded();
-        await this.page.waitForTimeout(200);
-
-        // Click the button
-        await confirmButton.click();
-        this.logger.info(`Surveillance: Confirm button clicked for ${orderId} (attempt ${attempt})`);
-
-        // Post-condition: verify the modal disappears
-        try {
-          await Promise.race([
-            this.page.waitForSelector('div[role="dialog"]', { state: 'hidden', timeout: MODAL_DISAPPEAR_TIMEOUT }).catch(() => null),
-            this.page.waitForSelector('div.bcc-modal.bcc-modal_show', { state: 'hidden', timeout: MODAL_DISAPPEAR_TIMEOUT }).catch(() => null),
-            this.page.waitForSelector('div[data-pw="input-code-container"]', { state: 'hidden', timeout: MODAL_DISAPPEAR_TIMEOUT }).catch(() => null),
-          ]);
-
-          // Double-check: is the modal actually gone?
-          const dialogVisible = await this.page.$('div[role="dialog"]').then(el => el?.isVisible()).catch(() => false);
-          const modalVisible = await this.page.$('div.bcc-modal.bcc-modal_show').then(el => el?.isVisible()).catch(() => false);
-
-          if (!dialogVisible && !modalVisible) {
-            this.logger.info(`Surveillance: ✅ Modal disappeared after confirm click for ${orderId}`);
-            return { success: true };
-          }
-
-          this.logger.warn(`Surveillance: Modal still visible after attempt ${attempt} for ${orderId}`);
-        } catch (waitError) {
-          this.logger.warn(`Surveillance: Modal disappearance check failed on attempt ${attempt}: ${waitError}`);
-        }
-
-        // After 2nd failed attempt — take debug screenshot for admin validation
-        let failureScreenshot: Buffer | undefined;
-        if (attempt === 2) {
-          this.logger.warn(`Surveillance: 2 attempts failed for ${orderId}, capturing debug screenshot for admin...`);
-          try {
-            failureScreenshot = await this.page.screenshot({ type: 'png', fullPage: false });
-            this.logger.info(`Surveillance: Debug screenshot captured after 2 failed attempts for ${orderId}`);
-          } catch (screenshotErr) {
-            this.logger.warn(`Surveillance: Failed to capture debug screenshot: ${screenshotErr}`);
-          }
-        }
-
-        // Check for error modals before retrying
-        const errorCheck = await this.checkSmsErrorModal();
-        if (errorCheck.error) {
-          this.logger.error(`Surveillance: Error modal detected after confirm click for ${orderId}, isBlocked: ${errorCheck.isBlocked}`);
-          return { success: false, debugScreenshot: failureScreenshot };
-        }
-
-        // Re-find the button for next attempt (DOM may have changed)
-        if (attempt < MAX_CLICK_ATTEMPTS) {
-          this.logger.info(`Surveillance: Re-locating confirm button for retry...`);
-          await this.page.waitForTimeout(500);
-
-          confirmButton = null;
-          for (const selector of buttonSelectors) {
-            const btn = await this.page.$(selector);
-            if (btn) {
-              const isVisible = await btn.isVisible().catch(() => false);
-              if (isVisible) {
-                confirmButton = btn;
-                usedSelector = selector;
-                break;
-              }
-            }
-          }
-
-          if (!confirmButton) {
-            // Button gone — check if modal also closed (success case)
-            const finalDialogCheck = await this.page.$('div[role="dialog"]').then(el => el?.isVisible()).catch(() => false);
-            const finalModalCheck = await this.page.$('div.bcc-modal.bcc-modal_show').then(el => el?.isVisible()).catch(() => false);
-
-            if (!finalDialogCheck && !finalModalCheck) {
-              this.logger.info(`Surveillance: ✅ Button and modal both gone — treating as success for ${orderId}`);
-              return { success: true };
-            }
-
-            this.logger.error(`Surveillance: Confirm button disappeared but modal still visible for ${orderId}`);
-            return { success: false };
-          }
-        }
-      }
-
-      // All attempts exhausted — take final screenshot for admin
-      this.logger.error(`Surveillance: ❌ Failed to confirm after ${MAX_CLICK_ATTEMPTS} attempts for ${orderId}`);
-      let finalScreenshot: Buffer | undefined;
-      try {
-        finalScreenshot = await this.page.screenshot({ type: 'png', fullPage: false });
-      } catch (e) {
-        this.logger.warn(`Surveillance: Failed to take final screenshot: ${e}`);
-      }
-      return { success: false, debugScreenshot: finalScreenshot };
+      return this.logSmsCodeResult(orderId, (await this.waitSmsCodeOutcome(20000)) ?? 'WRONG');
     } catch (error) {
-      this.logger.error(`Surveillance: Failed to click confirm button for ${orderId} - ${error}`);
-      return { success: false };
+      this.logger.error(`Surveillance: Failed to submit SMS code for ${orderId} - ${error}`);
+      return 'FAILED';
     }
+  }
+
+  private logSmsCodeResult(orderId: string, result: SmsCodeResult): SmsCodeResult {
+    this.logger.info(`Surveillance: SMS code result for ${orderId}: ${result}`);
+    return result;
   }
 
   async verifySmsCompletion(orderId: string): Promise<boolean> {
@@ -1513,33 +1182,26 @@ export class SurveillanceAgent extends EventEmitter {
     }
 
     try {
-      // Check 1: Modal disappeared
-      const modalVisible = await this.page.$('.bcc-modal.bcc-modal_show').catch(() => null);
+      // The table status is the only proof; a leftover info modal must not block the refresh click
+      const modalVisible = await this.page.$('.bcc-modal.bcc-modal_show').then(el => el?.isVisible() ?? false).catch(() => false);
       if (modalVisible) {
-        this.logger.debug(`Surveillance: Modal still visible for ${orderId}`);
-        return false;
+        await this.page.keyboard.press('Escape').catch(() => {});
+        await this.page.waitForTimeout(500);
       }
 
-      // Check 2: SMS input field disappeared
-      const inputVisible = await this.page.$('input.bcc-input-code__input').catch(() => null);
-      if (inputVisible) {
-        this.logger.debug(`Surveillance: SMS input still visible for ${orderId}`);
-        return false;
-      }
-
-      // Check 3: Refresh and check status changed to "Подтверждено"
       await this.softRefresh();
       await this.page.waitForTimeout(2000);
 
       const orders = await this.extractOrders();
       const order = orders.find(o => o.external_id === orderId);
 
-      if (order && order.status === 'READY_FOR_QR') {
-        this.logger.info(`Surveillance: SMS completion verified for ${orderId} - status is READY_FOR_QR`);
+      // After an SMS confirmation the bank shows «В обработке» first, «Подтверждено» later
+      if (order && (order.status === 'READY_FOR_QR' || order.status === 'IN_PROCESSING')) {
+        this.logger.info(`Surveillance: Bank confirmed ${orderId} - status is ${order.status}`);
         return true;
       }
 
-      this.logger.debug(`Surveillance: Order ${orderId} status not yet READY_FOR_QR`);
+      this.logger.debug(`Surveillance: Order ${orderId} not confirmed by bank yet (status ${order?.status ?? 'not found'})`);
       return false;
     } catch (error) {
       this.logger.error(`Surveillance: Failed to verify SMS completion for ${orderId} - ${error}`);

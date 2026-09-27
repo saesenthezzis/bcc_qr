@@ -3,7 +3,12 @@ import { Logger } from '../utils/Logger';
 import { SurveillanceAgent } from './Surveillance';
 import { RegistryAgent } from './Registry';
 import { SmsFlowStatus } from '../types/SmsFlowStatus';
-import { OrderAttributes } from '../types';
+import { SmsCodeLoopOutcome, SmsStatus } from '../types';
+import { BotText, formatTimeLeft } from '../utils/botMessages';
+import { CodeRequestKind, runSmsCodeLoop } from '../utils/smsCodeLoop';
+
+const DECISION_TIMEOUT_SEC = 240;
+const CODE_TIMEOUT_SEC = 180;
 
 export interface ChatWithThread {
   chatId: number;
@@ -37,8 +42,8 @@ export class DispatcherAgent {
   private smsCodeCallbacks: Map<string, (code: string) => void> = new Map();
   private decisionMessageRefs: Map<string, Map<number, TelegramMessageRef>> = new Map();
   private codeMessageRefs: Map<string, Map<number, TelegramMessageRef>> = new Map();
-  private decisionIntervals: Map<string, NodeJS.Timeout> = new Map();
-  private codeIntervals: Map<string, NodeJS.Timeout> = new Map();
+  /** Orders whose "send SMS?" question is open — the send button is ignored at any other step. */
+  private awaitingDecision: Set<string> = new Set();
   private readonly MESSAGE_REF_TTL_MS = 24 * 60 * 60 * 1000;
 
   constructor(botToken: string, chatIds: string[], logger: Logger, adminId?: string, surveillanceAgent?: SurveillanceAgent) {
@@ -196,9 +201,7 @@ export class DispatcherAgent {
             const orderId = activeOrderId.split(':')[0]; // Extract orderId from key format "orderId:chatId"
             this.logger.info(`Dispatcher: 4-digit code without reply — applying to ${orderId}`);
             // Personal hint to the sender only; the order status itself is posted by handleSmsCodeReply
-            await ctx.reply(
-              'ℹ️ Для надёжности используйте кнопку "Ответить" на сообщение с запросом кода.'
-            ).catch(() => {});
+            await ctx.reply(BotText.useReplyHint).catch(() => {});
             await this.handleSmsCodeReply(orderId, text.trim(), ctx);
             return;
           }
@@ -211,7 +214,7 @@ export class DispatcherAgent {
           if (this.surveillanceAgent) {
             this.surveillanceAgent.submitSmsCode(text);
             this.isWaitingForSms = false;
-            await ctx.reply('✅ СМС-код принят и введён в систему.');
+            await ctx.reply('✅ Код принят');
             return;
           }
         }
@@ -469,7 +472,7 @@ export class DispatcherAgent {
 
   async sendQRCode(photoBuffer: Buffer, orderId: string, amount: number): Promise<void> {
     let successCount = 0;
-    const caption = `🧾 ИИН #${orderId}\nСумма: ${amount.toFixed(2)} KZT\n${new Date().toISOString()}`;
+    const caption = BotText.qrCaption(orderId, amount);
 
     for (const { chatId, threadId } of this.getNotificationChats()) {
       try {
@@ -533,7 +536,7 @@ export class DispatcherAgent {
         source: screenshot,
         filename: 'sms_verification.png',
       }, {
-        caption: `🔐 Требуется СМС-код для входа\n\n⏰ Время: ${timestamp}\n\n📝 Отправьте СМС-код в ответ (только цифры).`,
+        caption: `🔐 Нужен код из SMS для входа в кабинет банка.\nПришлите цифры кода ответом.\n\n${timestamp}`,
       });
 
       this.isWaitingForSms = true;
@@ -545,7 +548,7 @@ export class DispatcherAgent {
 
   async sendConfirmationAlert(externalId: string, amount: number): Promise<void> {
     let successCount = 0;
-    const caption = `⚠️ ТРЕБУЕТСЯ ПОДТВЕРЖДЕНИЕ\n\nИИН: ${externalId}\nСумма: ${amount.toFixed(2)} тг\n\n---\nНужно подтвердить заявку в личном кабинете: https://online.bcc.kz/cashier-cabinet\nПосле вашего подтверждения бот автоматически пришлет QR-код в этот чат.\n\nАктуальная инструкция — в закрепленном сообщении.\n\nНАПОМИНАНИЕ: все неподтвержденные заявки автоматически аннулируются.`;
+    const caption = BotText.needsConfirmation(externalId, amount);
 
     for (const { chatId, threadId } of this.getNotificationChats()) {
       try {
@@ -588,8 +591,17 @@ export class DispatcherAgent {
 
   // SMS Confirmation Methods
 
+  private decisionKeyboard(orderId: string) {
+    return {
+      inline_keyboard: [[
+        { text: BotText.sendSmsButton, callback_data: `send_sms:${orderId}` },
+        { text: BotText.skipSmsButton, callback_data: `cancel_sms:${orderId}` },
+      ]],
+    };
+  }
+
   async sendSmsConfirmationRequest(orderId: string, amount: number): Promise<boolean> {
-    const caption = `📱 ОТПРАВИТЬ SMS КЛИЕНТУ?\n\nИИН: ${orderId}\nСумма: ${amount.toFixed(2)} тг\n\n⏸️ Мониторинг приостановлен — новые QR не генерируются.\nЕсли желаете подтвердить сами — нажмите «↩️ Не отправлять SMS».\n\n⚠️ Нажмите кнопку ниже чтобы отправить SMS-код клиенту.\nℹ️ Кнопка «Не отправлять SMS» не отменяет заявку клиента.`;
+    const caption = BotText.askSendSms(orderId, amount, formatTimeLeft(DECISION_TIMEOUT_SEC));
 
     this.decisionMessageRefs.delete(orderId);
     let successCount = 0;
@@ -598,14 +610,7 @@ export class DispatcherAgent {
       try {
         const message = await this.bot.telegram.sendMessage(chatId, caption, {
           message_thread_id: threadId,
-          reply_markup: {
-            inline_keyboard: [
-              [
-                { text: '✅ Отправить SMS', callback_data: `send_sms:${orderId}` },
-                { text: '↩️ Не отправлять SMS', callback_data: `cancel_sms:${orderId}` }
-              ]
-            ]
-          }
+          reply_markup: this.decisionKeyboard(orderId),
         });
 
         this.setMessageRef(this.decisionMessageRefs, orderId, {
@@ -628,36 +633,22 @@ export class DispatcherAgent {
 
   private async handleSmsConfirmationCallback(orderId: string, ctx: any): Promise<void> {
     try {
-      await ctx.answerCbQuery('Обработка запроса...');
-
-      // Trigger the callback if registered
-      const callback = this.smsCodeCallbacks.get(orderId);
-      if (callback) {
-        callback('CONFIRMED');
-        this.logger.info(`Dispatcher: SMS confirmation callback triggered for ${orderId}`);
-      } else {
-        this.logger.warn(`Dispatcher: No callback registered for order ${orderId}`);
+      // A late press must not be taken as an SMS code by the code step
+      if (!this.awaitingDecision.has(orderId)) {
+        await ctx.answerCbQuery('Уже не актуально');
+        return;
       }
-
-      // Update the message
-      await ctx.editMessageText(
-        `✅ Запрос принят!\n\nИИН: ${orderId}\n\nОтправка СМС клиенту...`,
-        { reply_markup: undefined }
-      );
+      await ctx.answerCbQuery('Отправляю SMS…');
+      this.smsCodeCallbacks.get(orderId)?.('CONFIRMED');
+      this.logger.info(`Dispatcher: SMS confirmation callback triggered for ${orderId}`);
+      await ctx.editMessageText(BotText.sendingSms(orderId), { reply_markup: undefined });
     } catch (error) {
       this.logger.error(`Dispatcher: Failed to handle SMS confirmation callback for ${orderId} - ${error}`);
-      await ctx.answerCbQuery('Ошибка обработки запроса').catch(() => {});
+      await ctx.answerCbQuery('Ошибка').catch(() => {});
     }
   }
 
-  async sendSmsCodeRequest(orderId: string, screenshot: Buffer, isRetry: boolean = false, attemptNumber: number = 1, amount?: number): Promise<boolean> {
-    let caption = '';
-    if (isRetry) {
-      caption = `⚠️ Предыдущий код не подошёл. Клиенту направлен новый SMS.\nПопытка ${attemptNumber}/3\n\n📝 Ответьте на это сообщение новым кодом (только цифры).`;
-    } else {
-      caption = `📲 ВВЕДИТЕ SMS-КОД\nИИН: ${orderId}\nСумма: ${amount?.toFixed(2) || 'N/A'} тг\n\n📝 Ответьте на это сообщение кодом (только цифры).\nℹ️ У вас есть 5 минут.`;
-    }
-
+  async sendSmsCodeRequest(orderId: string, screenshot: Buffer, caption: string): Promise<boolean> {
     this.clearReplyContexts(orderId);
     this.codeMessageRefs.delete(orderId);
     let successCount = 0;
@@ -700,109 +691,26 @@ export class DispatcherAgent {
 
   private async handleSmsCodeReply(orderId: string, code: string, ctx: any): Promise<void> {
     try {
-      // Validate code format
       if (!/^\d{4,6}$/.test(code)) {
-        await ctx.reply('❌ Неверный формат СМС-кода. Отправьте только цифры (4-6 знаков).');
+        await ctx.reply(BotText.badCodeFormat);
         return;
       }
 
-      // Get user info
-      const username = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name || 'Пользователь';
-
-      // Trigger the callback if registered
       const callback = this.smsCodeCallbacks.get(orderId);
-      if (callback) {
-        callback(code);
-        this.logger.info(`Dispatcher: SMS code received for ${orderId}: ${code} from ${username}`);
-        
-        // Update the original message with intermediate status
-        const replyContext = this.smsCodeReplyContexts.get(this.getReplyContextKey(orderId, ctx.chat.id));
-        if (replyContext) {
-          try {
-            await this.bot.telegram.editMessageCaption(
-              ctx.chat.id,
-              replyContext.messageId,
-              undefined,
-              `⏳ КОД ПЕРЕДАН В БАНК\n\nИИН: ${orderId}\n\n👤 Код введен пользователем ${username}\n⏰ ${new Date().toISOString()}`
-            );
-          } catch (editError) {
-            this.logger.warn(`Dispatcher: Failed to edit message for ${orderId} - ${editError}`);
-          }
-        }
-
-        // Order status goes to the same chats as the final ✅/❌/⚠️ result; input errors stay personal (ctx.reply)
-        await this.sendToAllowedChats(`⏳ Код по заявке ${orderId} принят ботом, проверяем в системе банка...`);
-
-        // Clean up callback for this attempt
-        this.smsCodeCallbacks.delete(orderId);
-      } else {
-        this.logger.warn(`Dispatcher: No callback registered for order ${orderId}`);
-        await ctx.reply(`⚠️ Заявка ${orderId} не найдена или уже обработана.`);
+      if (!callback) {
+        await ctx.reply(BotText.codeNotExpected(orderId));
+        return;
       }
+
+      const username = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name || 'сотрудник';
+      this.logger.info(`Dispatcher: SMS code received for ${orderId} from ${username}`);
+      this.smsCodeCallbacks.delete(orderId);
+      callback(code);
+      // One status for everybody: the request message itself turns into "checking"
+      await this.updateCountdownMessage(orderId, BotText.checkingCode(orderId, username));
     } catch (error) {
       this.logger.error(`Dispatcher: Failed to handle SMS code reply for ${orderId} - ${error}`);
-      await ctx.reply('❌ Ошибка обработки СМС-кода').catch(() => {});
-    }
-  }
-
-  async sendSmsBlockedAlert(orderId: string, screenshot: Buffer): Promise<void> {
-    if (!this.adminChatId) {
-      this.logger.warn('Dispatcher: ADMIN_ID not configured, SMS blocked alert skipped');
-      return;
-    }
-
-    try {
-      const caption = `🚫 КОД НЕ ПРИНЯТ\n\nИИН: ${orderId}\n\n`;
-
-      await this.bot.telegram.sendPhoto(this.adminChatId, {
-        source: screenshot,
-        filename: `sms_blocked_${orderId}.png`,
-      }, {
-        caption,
-      });
-
-      this.logger.info(`Dispatcher: SMS blocked alert sent to admin ${this.adminChatId} for order ${orderId}`);
-    } catch (sendError) {
-      await this.handleTelegramError(sendError, `sendSmsBlockedAlert to ${this.adminChatId}`);
-    }
-  }
-
-  async sendSmsButtonNotFoundAlert(orderId: string, screenshot: Buffer): Promise<void> {
-    if (!this.adminChatId) {
-      this.logger.warn('Dispatcher: ADMIN_ID not configured, SMS button not found alert skipped');
-      return;
-    }
-
-    try {
-      const caption = `⚠️ КНОПКА SMS НЕ НАЙДЕНА\n\nИИН: ${orderId}\n\nНе удалось найти кнопку отправки SMS на странице.\nВозможно, заявка была обработана или интерфейс изменился.`;
-
-      await this.bot.telegram.sendPhoto(this.adminChatId, {
-        source: screenshot,
-        filename: `sms_button_not_found_${orderId}.png`,
-      }, {
-        caption,
-      });
-
-      this.logger.info(`Dispatcher: SMS button not found alert sent to admin ${this.adminChatId} for order ${orderId}`);
-    } catch (sendError) {
-      await this.handleTelegramError(sendError, `sendSmsButtonNotFoundAlert to ${this.adminChatId}`);
-    }
-  }
-
-  async sendSmsBlockedNotification(orderId: string): Promise<void> {
-    const caption = `🚫 ИИН ${orderId}: доступ заблокирован на 24 часа.\nОбратитесь в поддержку: 605`;
-
-    for (const { chatId, threadId } of this.getNotificationChats()) {
-      try {
-        await this.bot.telegram.sendMessage(chatId, caption, {
-          message_thread_id: threadId,
-        });
-
-        const threadInfo = threadId ? ` (thread ${threadId})` : '';
-        this.logger.info(`Dispatcher: SMS blocked notification sent to chat_id ${chatId}${threadInfo} for order ${orderId}`);
-      } catch (sendError) {
-        await this.handleTelegramError(sendError, `sendSmsBlockedNotification to ${chatId}`);
-      }
+      await ctx.reply('❌ Не получилось принять код, пришлите ещё раз.').catch(() => {});
     }
   }
 
@@ -814,23 +722,6 @@ export class DispatcherAgent {
         });
       } catch (error) {
         await this.handleTelegramError(error, `sendToAllowedChats to ${chatId}`);
-      }
-    }
-  }
-
-  async sendSmsLimitExceeded(orderId: string, attempts: number): Promise<void> {
-    const caption = `⛔ ПРЕВЫШЕН ЛИМИТ ПОПЫТОК\n\nИИН: ${orderId}\nПопыток: ${attempts}\n\n❌ Достигнут максимальный лимит попыток отправки СМС (${process.env.SMS_MAX_ATTEMPTS || 3}).\n\nЗаявка требует ручной обработки.`;
-
-    for (const { chatId, threadId } of this.getNotificationChats()) {
-      try {
-        await this.bot.telegram.sendMessage(chatId, caption, {
-          message_thread_id: threadId,
-        });
-
-        const threadInfo = threadId ? ` (thread ${threadId})` : '';
-        this.logger.info(`Dispatcher: SMS limit exceeded alert sent to chat_id ${chatId}${threadInfo} for order ${orderId}`);
-      } catch (sendError) {
-        await this.handleTelegramError(sendError, `sendSmsLimitExceeded to ${chatId}`);
       }
     }
   }
@@ -907,30 +798,13 @@ export class DispatcherAgent {
     this.codeMessageRefs.delete(orderId);
   }
 
-  private clearDecisionInterval(orderId: string): void {
-    const interval = this.decisionIntervals.get(orderId);
-    if (interval) {
-      clearInterval(interval);
-      this.decisionIntervals.delete(orderId);
-    }
-  }
-
-  private clearCodeInterval(orderId: string): void {
-    const interval = this.codeIntervals.get(orderId);
-    if (interval) {
-      clearInterval(interval);
-      this.codeIntervals.delete(orderId);
-    }
-  }
-
-  private clearSmsIntervals(orderId: string): void {
-    this.clearDecisionInterval(orderId);
-    this.clearCodeInterval(orderId);
-  }
-
   private async handleSmsCancellation(orderId: string, ctx: any): Promise<void> {
     try {
-      await ctx.answerCbQuery('Отменено');
+      if (!this.awaitingDecision.has(orderId)) {
+        await ctx.answerCbQuery('Уже не актуально');
+        return;
+      }
+      await ctx.answerCbQuery('Не отправляю');
 
       // Trigger the callback with CANCELLED signal
       const callback = this.smsCodeCallbacks.get(orderId);
@@ -942,13 +816,10 @@ export class DispatcherAgent {
       }
 
       // Get user info to include in the message
-      const username = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name || 'Пользователь';
+      const username = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name || 'сотрудник';
 
       // Update the message
-      await ctx.editMessageText(
-        `↩️ SMS НЕ БУДЕТ ОТПРАВЛЕН\n\nИИН: ${orderId}\n\n👤 ${username} отменил отправку\n✅ Заявка клиента НЕ отменена\n🔄 Бот возвращается к мониторингу`,
-        { reply_markup: undefined }
-      );
+      await ctx.editMessageText(BotText.smsSkipped(orderId, username), { reply_markup: undefined });
 
       // Clean up
       this.smsCodeCallbacks.delete(orderId);
@@ -962,485 +833,209 @@ export class DispatcherAgent {
     }
   }
 
-  async performSmsFlow(orderId: string, amount: number): Promise<SmsFlowStatus> {
-    const surveillanceAgent = this.surveillanceAgent;
-    if (!surveillanceAgent) {
-      this.logger.error('Surveillance agent not available in performSmsFlow');
-      return SmsFlowStatus.TIMEOUT;
-    }
-
-    return new Promise<SmsFlowStatus>(async (resolve) => {
-      const registry = surveillanceAgent.getRegistry();
-      let decisionTimeout: NodeJS.Timeout | null = null;
-      let codeTimeout: NodeJS.Timeout | null = null;
-      let lockAcquired = false;
-      let settled = false;
-      
-      const cleanup = () => {
-        if (decisionTimeout) clearTimeout(decisionTimeout);
-        if (codeTimeout) clearTimeout(codeTimeout);
-        this.clearSmsIntervals(orderId);
-        this.unregisterSmsCodeCallback(orderId);
-      };
-
-      const syncSmsStatus = async (
-        status: 'WAITING_FOR_USER_ACTION' | 'SMS_SENT' | 'SMS_CONFIRMED' | 'SMS_BLOCKED' | 'USER_REFUSED_SMS' | 'IGNORED' | 'SMS_TIMEOUT',
-        incrementCount: boolean = false
-      ) => {
-        if (!registry) {
-          return;
-        }
-
-        const existing = await registry.getSmsConfirmation(orderId);
-        if (!existing) {
-          await registry.registerSmsConfirmation(orderId, amount, status);
-          // registerSmsConfirmation starts at sent_count=0 — count the first request too
-          if (incrementCount) {
-            await registry.updateSmsStatusWithCount(orderId, status);
-          }
-          return;
-        }
-
-        if (incrementCount) {
-          await registry.updateSmsStatusWithCount(orderId, status);
-          return;
-        }
-
-        await registry.updateSmsStatus(orderId, status);
-      };
-
-      const expireDecisionMessage = async () => {
-        const decisionRefs = this.getMessageRefs(this.decisionMessageRefs, orderId);
-        if (decisionRefs.length === 0) {
-          return;
-        }
-
-        for (const ref of decisionRefs) {
-          try {
-            await this.bot.telegram.editMessageText(
-              ref.chatId,
-              ref.messageId,
-              undefined,
-              'Время ожидания истекло',
-              { reply_markup: undefined }
-            );
-          } catch (error: any) {
-            if (error?.response?.description?.includes('message is not modified')) {
-              continue;
-            }
-            await this.handleTelegramError(error, `expireDecisionMessage in ${ref.chatId}`);
-          }
-        }
-      };
-
-      const finalizeFlow = async (
-        status: SmsFlowStatus,
-        options?: {
-          smsStatus?: 'WAITING_FOR_USER_ACTION' | 'SMS_SENT' | 'SMS_CONFIRMED' | 'SMS_BLOCKED' | 'USER_REFUSED_SMS' | 'IGNORED' | 'SMS_TIMEOUT';
-          incrementCount?: boolean;
-          expireDecision?: boolean;
-        }
-      ) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-
-        cleanup();
-
-        try {
-          if (options?.expireDecision) {
-            await expireDecisionMessage();
-          }
-
-          if (options?.smsStatus) {
-            await syncSmsStatus(options.smsStatus, options.incrementCount);
-          }
-        } catch (error) {
-          this.logger.error(`Dispatcher: Failed to finalize SMS flow state for ${orderId} - ${error}`);
-        } finally {
-          this.clearMessageRefs(orderId);
-          if (registry && lockAcquired) {
-            await registry.releaseSmsLock(orderId);
-          }
-          resolve(status);
-        }
-      };
-
-      const startDecisionCountdown = (initialSeconds: number) => {
-        let secondsLeft = initialSeconds;
-        this.clearDecisionInterval(orderId);
-        
-        const interval = setInterval(async () => {
-          secondsLeft -= 60;
-          const minutes = Math.floor(secondsLeft / 60);
-          const seconds = secondsLeft % 60;
-          const countdownText = `⏱️ Ожидание решения: ${minutes}:${seconds.toString().padStart(2, '0')}`;
-          
-          if (this.getMessageRefs(this.decisionMessageRefs, orderId).length > 0) {
-            try {
-              await this.updateDecisionCountdown(orderId, countdownText);
-            } catch (error) {
-              this.logger.warn(`Failed to update decision countdown: ${error}`);
-            }
-          }
-          
-          if (secondsLeft <= 0) {
-            this.clearDecisionInterval(orderId);
-            void finalizeFlow(SmsFlowStatus.TIMEOUT, {
-              smsStatus: 'IGNORED',
-              expireDecision: true,
-            });
-          }
-        }, 60000);
-
-        this.decisionIntervals.set(orderId, interval);
-      };
-
-      const startCodeCountdown = (initialSeconds: number) => {
-        let secondsLeft = initialSeconds;
-        this.clearCodeInterval(orderId);
-        
-        const interval = setInterval(async () => {
-          secondsLeft -= 60;
-          const minutes = Math.floor(secondsLeft / 60);
-          const seconds = secondsLeft % 60;
-          const countdownText = `⏱️ Ожидание СМС-кода: ${minutes}:${seconds.toString().padStart(2, '0')}`;
-          
-          if (this.getMessageRefs(this.codeMessageRefs, orderId).length > 0) {
-            try {
-              await this.updateCountdownMessage(orderId, countdownText);
-            } catch (error) {
-              this.logger.warn(`Failed to update code countdown: ${error}`);
-            }
-          }
-          
-          if (secondsLeft <= 0) {
-            this.clearCodeInterval(orderId);
-            void finalizeFlow(SmsFlowStatus.TIMEOUT, {
-              smsStatus: 'SMS_TIMEOUT',
-            });
-          }
-        }, 60000);
-
-        this.codeIntervals.set(orderId, interval);
-      };
-
-      // Step 1: Send decision request (send SMS or cancel)
-      try {
-        if (registry) {
-          lockAcquired = await registry.acquireSmsLock(orderId);
-          if (!lockAcquired) {
-            this.logger.warn(`Dispatcher: SMS lock is already held for ${orderId}, skipping flow`);
-            resolve(SmsFlowStatus.TIMEOUT);
-            return;
-          }
-
-          await syncSmsStatus('WAITING_FOR_USER_ACTION', true);
-        }
-
-        const decisionRequestSent = await this.sendSmsConfirmationRequest(orderId, amount);
-        if (!decisionRequestSent) {
-          this.logger.error(`Failed to send SMS confirmation request for ${orderId}`);
-          await finalizeFlow(SmsFlowStatus.TIMEOUT, {
-            smsStatus: 'SMS_TIMEOUT',
-          });
-          return;
-        }
-        
-        startDecisionCountdown(240);
-        
-        decisionTimeout = setTimeout(() => {
-          this.logger.info(`Decision timeout for order ${orderId}`);
-          void finalizeFlow(SmsFlowStatus.TIMEOUT, {
-            smsStatus: 'IGNORED',
-            expireDecision: true,
-          });
-        }, 240000);
-        
-        // Wait for decision callback
-        const decisionResult = await new Promise<string>((decisionResolve) => {
-          this.registerSmsCodeCallback(orderId, (code) => {
-            if (decisionTimeout) clearTimeout(decisionTimeout);
-            this.clearDecisionInterval(orderId);
-            decisionResolve(code);
-          });
-        });
-        
-        if (decisionResult === 'CANCELLED') {
-          this.logger.info(`SMS flow cancelled for order ${orderId}`);
-          await finalizeFlow(SmsFlowStatus.CANCELLED, {
-            smsStatus: 'USER_REFUSED_SMS',
-          });
-          return;
-        }
-
-        const smsButtonClicked = await this.retryOperation(async () => {
-          if (!this.surveillanceAgent) {
-            throw new Error('Surveillance agent not available');
-          }
-          return await this.surveillanceAgent.clickSendSmsButton(orderId);
-        });
-
-        if (!smsButtonClicked) {
-          this.logger.error(`Failed to click Send SMS button for ${orderId} after user confirmation`);
-          await finalizeFlow(SmsFlowStatus.TIMEOUT, {
-            smsStatus: 'SMS_TIMEOUT',
-          });
-          return;
-        }
-
-        this.logger.info(`Dispatcher: Send SMS button clicked for ${orderId}, waiting for SMS code from user`);
-        // sent_count = number of confirmation requests posted to chat; counted once at WAITING_FOR_USER_ACTION
-        await syncSmsStatus('SMS_SENT');
-        
-        // Step 2: Decision confirmed, now wait for SMS code
-        let attemptNumber = 1;
-        const maxAttempts = parseInt(process.env.SMS_MAX_ATTEMPTS || '3', 10);
-        
-        while (attemptNumber <= maxAttempts) {
-          try {
-              // Get fresh screenshot from browser
-                const screenshot = await this.retryOperation(async () => {
-                  if (!this.surveillanceAgent) {
-                    throw new Error('Surveillance agent not available');
-                  }
-                  return await this.surveillanceAgent.takeSmsScreenshot(orderId, 'input');
-                });
-            
-            if (!screenshot) {
-              this.logger.error(`Failed to get screenshot for SMS code entry for ${orderId}, attempt ${attemptNumber}`);
-              if (attemptNumber === maxAttempts) {
-                await finalizeFlow(SmsFlowStatus.TIMEOUT, {
-                  smsStatus: 'SMS_TIMEOUT',
-                });
-                return;
-              }
-              attemptNumber++;
-              continue;
-            }
-            
-            const codeRequestSent = await this.sendSmsCodeRequest(
-              orderId, 
-              screenshot, 
-              attemptNumber > 1, 
-              attemptNumber, 
-              amount
-            );
-            
-            if (!codeRequestSent) {
-              this.logger.error(`Failed to send SMS code request for ${orderId}, attempt ${attemptNumber}`);
-              if (attemptNumber === maxAttempts) {
-                await finalizeFlow(SmsFlowStatus.TIMEOUT, {
-                  smsStatus: 'SMS_TIMEOUT',
-                });
-                return;
-              }
-              attemptNumber++;
-              continue;
-            }
-            
-            startCodeCountdown(180);
-            
-            codeTimeout = setTimeout(() => {
-              this.logger.info(`SMS code timeout for order ${orderId}, attempt ${attemptNumber}`);
-              void finalizeFlow(SmsFlowStatus.TIMEOUT, {
-                smsStatus: 'SMS_TIMEOUT',
-              });
-            }, 180000);
-            
-            // Wait for SMS code
-            const smsCode = await new Promise<string>((codeResolve) => {
-              this.registerSmsCodeCallback(orderId, (code) => {
-                if (codeTimeout) clearTimeout(codeTimeout);
-                this.clearCodeInterval(orderId);
-                codeResolve(code);
-              });
-            });
-            
-            if (smsCode === 'CANCELLED') {
-              this.logger.info(`SMS code entry cancelled for order ${orderId}`);
-              await finalizeFlow(SmsFlowStatus.CANCELLED, {
-                smsStatus: 'USER_REFUSED_SMS',
-              });
-              return;
-            }
-            
-                // Step 1: Enter the code into input fields
-                const codeEntered = await this.retryOperation(async () => {
-                  if (!this.surveillanceAgent) {
-                    throw new Error('Surveillance agent not available');
-                  }
-                  return await this.surveillanceAgent.enterSmsCode(smsCode, orderId);
-                });
-
-            if (!codeEntered) {
-              this.logger.error(`Failed to enter SMS code for ${orderId}, attempt ${attemptNumber}`);
-              if (attemptNumber < maxAttempts) {
-                attemptNumber++;
-                continue;
-              }
-              await finalizeFlow(SmsFlowStatus.TIMEOUT, {
-                smsStatus: 'SMS_TIMEOUT',
-              });
-              return;
-            }
-
-            this.logger.info(`SMS code entered successfully for ${orderId}`);
-
-                // Step 2: Click the "Подтвердить" confirm button
-                const confirmResult = await this.retryOperation(async () => {
-                  if (!this.surveillanceAgent) {
-                    throw new Error('Surveillance agent not available');
-                  }
-                  return await this.surveillanceAgent.clickConfirmButton(orderId);
-                });
-
-            if (!confirmResult.success) {
-              this.logger.error(`Failed to click confirm button for ${orderId}, attempt ${attemptNumber}`);
-
-              // Send debug screenshot to admin for manual validation
-              if (confirmResult.debugScreenshot && this.adminChatId) {
-                try {
-                  const debugCaption = `⚠️ МОДАЛКА НЕ ЗАКРЫЛАСЬ\n\nИИН: ${orderId}\nПопытка: ${attemptNumber}/${maxAttempts}\n\n❌ После 2 попыток нажатия кнопки "Подтвердить" модальное окно не исчезло.\nСкриншот для ручной валидации ошибки.`;
-
-                  await this.bot.telegram.sendPhoto(this.adminChatId, {
-                    source: confirmResult.debugScreenshot,
-                    filename: `confirm_fail_${orderId}.png`,
-                  }, {
-                    caption: debugCaption,
-                  });
-
-                  this.logger.info(`Dispatcher: Confirm failure screenshot sent to admin ${this.adminChatId} for ${orderId}`);
-                } catch (sendError) {
-                  await this.handleTelegramError(sendError, `sendConfirmFailureScreenshot to ${this.adminChatId}`);
-                }
-              }
-
-              // Check for error/blocked modal after failed confirm
-              if (this.surveillanceAgent) {
-                const errorCheck = await this.surveillanceAgent.checkSmsErrorModal();
-                if (errorCheck.error || errorCheck.isBlocked) {
-                   this.logger.warn(`SMS error modal detected for ${orderId}. Returning ERROR_RECOVERY.`);
-                   // Recovery flow in index.ts posts its own request for a new code (or the "attempts exhausted" alert)
-                   await this.sendToAllowedChats(`❌ Банк не принял СМС-код для заявки ${orderId}.`);
-                   await finalizeFlow(SmsFlowStatus.ERROR_RECOVERY);
-                   return;
-                }
-              }
-
-              this.logger.error(`Generic failure to confirm SMS for ${orderId}`);
-              // No new code is accepted after this point, so do not ask the user to re-enter it
-              await this.sendToAllowedChats(
-                `⚠️ Не удалось подтвердить СМС-код для заявки ${orderId} (техническая ошибка на странице банка). Заявка будет перепроверена в следующем цикле.`
-              );
-              await finalizeFlow(SmsFlowStatus.TIMEOUT, {
-                smsStatus: 'SMS_TIMEOUT',
-              });
-              return;
-            }
-
-            // Step 3: Verify success
-            this.logger.info(`SMS code submitted and confirmed successfully for ${orderId}`);
-            await this.sendToAllowedChats(`✅ СМС-код принят системой для заявки ${orderId}`);
-            this.clearReplyContexts(orderId);
-            await finalizeFlow(SmsFlowStatus.SUCCESS, {
-              smsStatus: 'SMS_CONFIRMED',
-            });
-            return;
-            
-          } catch (error) {
-            this.logger.error(`Error in SMS code entry loop for ${orderId}, attempt ${attemptNumber}: ${error}`);
-            if (attemptNumber < maxAttempts) {
-              attemptNumber++;
-              continue;
-            } else {
-              await finalizeFlow(SmsFlowStatus.TIMEOUT, {
-                smsStatus: 'SMS_TIMEOUT',
-              });
-              return;
-            }
-          }
-        }
-        
-      } catch (error) {
-        this.logger.error(`Error in SMS flow for ${orderId}: ${error}`);
-        await finalizeFlow(SmsFlowStatus.TIMEOUT, {
-          smsStatus: 'SMS_TIMEOUT',
-        });
-      }
-    });
-  }
-
-  async updateCountdownMessage(orderId: string, countdownText: string): Promise<void> {
+  /** Edits every "enter the code" message (it is a photo, so the caption changes). */
+  async updateCountdownMessage(orderId: string, caption: string): Promise<void> {
     for (const ref of this.getMessageRefs(this.codeMessageRefs, orderId)) {
       try {
-        await this.bot.telegram.editMessageCaption(
-          ref.chatId,
-          ref.messageId,
-          undefined,
-          `🔐 ВВЕДИТЕ СМС-КОД\n\nИИН: ${orderId}\n\n${countdownText}\n\n📝 Ответьте на это сообщение с СМС-кодом (только цифры).`
-        );
-
-        const threadInfo = ref.threadId ? ` (thread ${ref.threadId})` : '';
-        this.logger.debug(`Dispatcher: Countdown updated for ${orderId} in chat_id ${ref.chatId}${threadInfo}`);
+        await this.bot.telegram.editMessageCaption(ref.chatId, ref.messageId, undefined, caption);
       } catch (editError: any) {
-        // Ignore "message is not modified" errors
-        if (editError?.response?.description?.includes('message is not modified')) {
-          continue;
-        }
+        if (editError?.response?.description?.includes('message is not modified')) continue;
         await this.handleTelegramError(editError, `updateCountdownMessage to ${ref.chatId}`);
       }
     }
   }
 
-  async updateDecisionCountdown(orderId: string, countdownText: string): Promise<void> {
+  /** Edits every "send SMS?" message; keyboard=false removes the buttons. */
+  async updateDecisionMessage(orderId: string, text: string, keyboard: boolean): Promise<void> {
     for (const ref of this.getMessageRefs(this.decisionMessageRefs, orderId)) {
       try {
-        await this.bot.telegram.editMessageText(
-          ref.chatId,
-          ref.messageId,
-          undefined,
-          `📱 ОТПРАВИТЬ SMS КЛИЕНТУ?\n\nИИН: ${orderId}\n\n${countdownText}\n\n⏸️ Мониторинг приостановлен — новые QR не генерируются.\nЕсли желаете подтвердить сами — нажмите «↩️ Не отправлять SMS».\n\n⚠️ Нажмите кнопку ниже чтобы отправить SMS-код клиенту.\nℹ️ Кнопка «Не отправлять SMS» не отменяет заявку клиента.`,
-          {
-            reply_markup: {
-              inline_keyboard: [
-                [
-                  { text: '✅ Отправить SMS', callback_data: `send_sms:${orderId}` },
-                  { text: '↩️ Не отправлять SMS', callback_data: `cancel_sms:${orderId}` }
-                ]
-              ]
-            }
-          }
-        );
-
-        const threadInfo = ref.threadId ? ` (thread ${ref.threadId})` : '';
-        this.logger.debug(`Dispatcher: Decision countdown updated for ${orderId} in chat_id ${ref.chatId}${threadInfo}`);
+        await this.bot.telegram.editMessageText(ref.chatId, ref.messageId, undefined, text, {
+          reply_markup: keyboard ? this.decisionKeyboard(orderId) : undefined,
+        });
       } catch (editError: any) {
-        // Ignore "message is not modified" errors
-        if (editError?.response?.description?.includes('message is not modified')) {
-          continue;
-        }
-        await this.handleTelegramError(editError, `updateDecisionCountdown to ${ref.chatId}`);
+        if (editError?.response?.description?.includes('message is not modified')) continue;
+        await this.handleTelegramError(editError, `updateDecisionMessage to ${ref.chatId}`);
       }
     }
   }
 
-  async sendTimeoutAlert(orderId: string, amount?: number): Promise<void> {
-    const caption = `⏱️ ТАЙМАУТ СМС-КОДА\n\nИИН: ${orderId}\nСумма: ${amount?.toFixed(2) || 'N/A'} тг\n\n❌ Истекло время ожидания СМС-кода (5 минут).\n\nЗаявка требует повторной обработки.`;
+  /**
+   * Waits for one callback (button or code) for this order, refreshing the countdown every minute.
+   * Resolves with null when time runs out. The callback is always unregistered on exit.
+   */
+  private waitForAnswer(
+    orderId: string,
+    timeoutSec: number,
+    onTick: (timeLeft: string) => Promise<void>
+  ): Promise<string | null> {
+    return new Promise<string | null>((resolve) => {
+      let secondsLeft = timeoutSec;
+      const finish = (value: string | null) => {
+        clearInterval(tick);
+        clearTimeout(timer);
+        this.smsCodeCallbacks.delete(orderId);
+        resolve(value);
+      };
+      const tick = setInterval(() => {
+        secondsLeft -= 60;
+        if (secondsLeft > 0) void onTick(formatTimeLeft(secondsLeft)).catch(() => {});
+      }, 60000);
+      const timer = setTimeout(() => finish(null), timeoutSec * 1000);
+      this.registerSmsCodeCallback(orderId, (value) => finish(value));
+    });
+  }
 
-    for (const { chatId, threadId } of this.getNotificationChats()) {
-      try {
-        await this.bot.telegram.sendMessage(chatId, caption, {
-          message_thread_id: threadId,
-        });
-
-        const threadInfo = threadId ? ` (thread ${threadId})` : '';
-        this.logger.info(`Dispatcher: Timeout alert sent to chat_id ${chatId}${threadInfo} for order ${orderId}`);
-      } catch (sendError) {
-        await this.handleTelegramError(sendError, `sendTimeoutAlert to ${chatId}`);
+  private async syncSmsStatus(orderId: string, amount: number, status: SmsStatus, incrementCount = false): Promise<void> {
+    const registry = this.surveillanceAgent?.getRegistry();
+    if (!registry) return;
+    try {
+      const existing = await registry.getSmsConfirmation(orderId, amount);
+      if (!existing) await registry.registerSmsConfirmation(orderId, amount, status);
+      if (incrementCount) {
+        await registry.updateSmsStatusWithCount(orderId, status);
+      } else if (existing) {
+        await registry.updateSmsStatus(orderId, status);
       }
+    } catch (error) {
+      this.logger.error(`Dispatcher: Failed to save SMS status ${status} for ${orderId} - ${error}`);
     }
+  }
+
+  /** Step 1: "send SMS to the client?" Returns 'CONFIRMED', 'CANCELLED' or null (no answer / not sent). */
+  private async askSendSmsDecision(orderId: string, amount: number): Promise<string | null> {
+    if (!(await this.sendSmsConfirmationRequest(orderId, amount))) return null;
+    this.awaitingDecision.add(orderId);
+    try {
+      const answer = await this.waitForAnswer(orderId, DECISION_TIMEOUT_SEC, (timeLeft) =>
+        this.updateDecisionMessage(orderId, BotText.askSendSms(orderId, amount, timeLeft), true)
+      );
+      if (answer === null) await this.updateDecisionMessage(orderId, BotText.decisionExpired, false);
+      return answer;
+    } finally {
+      this.awaitingDecision.delete(orderId);
+    }
+  }
+
+  /** Step 2 (one attempt): posts the code request with a fresh screenshot and waits for the reply. */
+  private async askSmsCode(
+    orderId: string,
+    amount: number,
+    kind: CodeRequestKind,
+    attempt: number,
+    maxAttempts: number
+  ): Promise<string | null> {
+    const caption = (timeLeft: string) => kind === 'FIRST'
+      ? BotText.waitingCode(orderId, amount, timeLeft)
+      : BotText.wrongCode(orderId, attempt, maxAttempts, timeLeft);
+
+    const screenshot = await this.surveillanceAgent!.takeSmsScreenshot(orderId, 'input');
+    if (!screenshot) return null;
+    if (!(await this.sendSmsCodeRequest(orderId, screenshot, caption(formatTimeLeft(CODE_TIMEOUT_SEC))))) return null;
+
+    const code = await this.waitForAnswer(orderId, CODE_TIMEOUT_SEC, (timeLeft) =>
+      this.updateCountdownMessage(orderId, caption(timeLeft))
+    );
+    if (code === null) await this.updateCountdownMessage(orderId, BotText.codeTimedOut(orderId));
+    return code;
+  }
+
+  /** Maps how the code dialog ended to a flow status, a DB status and one short chat message. */
+  private async finishCodeLoop(orderId: string, amount: number, outcome: SmsCodeLoopOutcome): Promise<SmsFlowStatus> {
+    switch (outcome) {
+      case 'ACCEPTED':
+        await this.updateCountdownMessage(orderId, BotText.codeAccepted(orderId));
+        await this.syncSmsStatus(orderId, amount, 'SMS_CONFIRMED');
+        return SmsFlowStatus.SUCCESS;
+      case 'CANCELLED':
+        await this.syncSmsStatus(orderId, amount, 'USER_REFUSED_SMS');
+        return SmsFlowStatus.CANCELLED;
+      case 'NO_CODE':
+        await this.syncSmsStatus(orderId, amount, 'SMS_TIMEOUT');
+        return SmsFlowStatus.TIMEOUT;
+      case 'TOO_MANY_WRONG':
+        await this.sendToAllowedChats(BotText.tooManyWrong(orderId));
+        await this.syncSmsStatus(orderId, amount, 'SMS_BLOCKED');
+        return SmsFlowStatus.TIMEOUT;
+      case 'BLOCKED':
+        await this.sendToAllowedChats(BotText.codeBlocked(orderId));
+        await this.syncSmsStatus(orderId, amount, 'SMS_BLOCKED');
+        return SmsFlowStatus.TIMEOUT;
+      default:
+        // The page misbehaved — the code may still have gone through; the bank table decides
+        await this.sendToAllowedChats(BotText.codeNotEntered(orderId));
+        await this.syncSmsStatus(orderId, amount, 'SMS_TIMEOUT');
+        return SmsFlowStatus.NEEDS_BANK_CHECK;
+    }
+  }
+
+  /**
+   * Full SMS confirmation of one order:
+   * ask "send SMS?" -> press the bank button -> ask for the code -> enter it -> read the page.
+   * A wrong code keeps the bank dialog open, so the staff is asked again (up to SMS_MAX_ATTEMPTS).
+   */
+  async performSmsFlow(orderId: string, amount: number): Promise<SmsFlowStatus> {
+    const surveillance = this.surveillanceAgent;
+    const registry = surveillance?.getRegistry() ?? null;
+    if (!surveillance) {
+      this.logger.error('Surveillance agent not available in performSmsFlow');
+      return SmsFlowStatus.TIMEOUT;
+    }
+
+    if (registry && !(await registry.acquireSmsLock(orderId, amount))) {
+      this.logger.warn(`Dispatcher: SMS lock is already held for ${orderId}, skipping flow`);
+      return SmsFlowStatus.TIMEOUT;
+    }
+
+    try {
+      return await this.runSmsFlowSteps(orderId, amount, surveillance);
+    } catch (error) {
+      this.logger.error(`Error in SMS flow for ${orderId}: ${error}`);
+      await this.syncSmsStatus(orderId, amount, 'SMS_TIMEOUT');
+      return SmsFlowStatus.TIMEOUT;
+    } finally {
+      this.smsCodeCallbacks.delete(orderId);
+      this.clearReplyContexts(orderId);
+      this.clearMessageRefs(orderId);
+      if (registry) await registry.releaseSmsLock(orderId);
+    }
+  }
+
+  private async runSmsFlowSteps(orderId: string, amount: number, surveillance: SurveillanceAgent): Promise<SmsFlowStatus> {
+    // sent_count = number of "send SMS?" requests posted to chat
+    await this.syncSmsStatus(orderId, amount, 'WAITING_FOR_USER_ACTION', true);
+
+    const decision = await this.askSendSmsDecision(orderId, amount);
+    if (decision === 'CANCELLED') {
+      await this.syncSmsStatus(orderId, amount, 'USER_REFUSED_SMS');
+      return SmsFlowStatus.CANCELLED;
+    }
+    if (decision === null) {
+      await this.syncSmsStatus(orderId, amount, 'IGNORED');
+      return SmsFlowStatus.TIMEOUT;
+    }
+
+    if (!(await surveillance.clickSendSmsButton(orderId))) {
+      this.logger.error(`Failed to click Send SMS button for ${orderId} after user confirmation`);
+      await this.sendToAllowedChats(BotText.codeNotEntered(orderId));
+      await this.syncSmsStatus(orderId, amount, 'SMS_TIMEOUT');
+      return SmsFlowStatus.NEEDS_BANK_CHECK;
+    }
+    await this.syncSmsStatus(orderId, amount, 'SMS_SENT');
+
+    const maxAttempts = parseInt(process.env.SMS_MAX_ATTEMPTS || '3', 10);
+    const outcome = await runSmsCodeLoop({
+      askCode: (kind, attempt) => this.askSmsCode(orderId, amount, kind, attempt, maxAttempts),
+      enterCode: (code) => surveillance.enterSmsCode(code, orderId),
+      submitCode: () => surveillance.confirmSmsCode(orderId),
+      isDialogOpen: () => surveillance.isSmsCodeDialogOpen(),
+      onWrongCode: async () => {
+        await this.updateCountdownMessage(orderId, BotText.wrongCodeShort(orderId));
+        const registry = surveillance.getRegistry();
+        if (registry) await registry.updateSmsAttempts(orderId).catch(() => 0);
+      },
+    }, orderId, maxAttempts);
+
+    return this.finishCodeLoop(orderId, amount, outcome);
   }
 
   // Getters to access private properties from outside the class

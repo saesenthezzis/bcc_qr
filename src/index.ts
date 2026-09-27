@@ -8,6 +8,8 @@ import { DispatcherAgent } from './agents/Dispatcher';
 import { SmsStatus } from './types';
 import { SmsFlowStatus } from './types/SmsFlowStatus';
 import { BankConfirmOptions, QrDeliveryDeps, sendQrOnce, sendQrWhenBankConfirms } from './utils/qrDelivery';
+import { BotText } from './utils/botMessages';
+import { shouldSendQrForInProcessing } from './utils/inProcessingRule';
 
 config();
 
@@ -58,18 +60,6 @@ surveillance.on('smsRequired', async ({ screenshot, timestamp }) => {
   await dispatcher.sendSmsRequest(screenshot, timestamp);
 });
 
-// Diagnostics only: "button not visible" is also returned on page errors, so it must not trigger a QR.
-surveillance.on('smsButtonNotFound', async ({ orderId, screenshotPath }) => {
-  Logger.warn(`[SMS] SMS button not found for ${orderId}, sending screenshot to Telegram`);
-  try {
-    const fs = await import('fs');
-    const buffer = fs.readFileSync(screenshotPath);
-    await dispatcher.sendSmsButtonNotFoundAlert(orderId, buffer);
-  } catch (error) {
-    Logger.error(`[SMS] Failed to send button-not-found alert for ${orderId}: ${error}`);
-  }
-});
-
 const CHECK_INTERVAL_MS = (parseInt(process.env.CHECK_INTERVAL_MINUTES || '1') * 60 * 1000);
 const GRACEFUL_RESTART_HOURS = 3;
 const BANK_CONFIRM_POLL_MS = 10 * 1000;
@@ -114,22 +104,14 @@ async function processSmsConfirmation(
     const result = await dispatcher.performSmsFlow(orderId, amount);
     Logger.info(`[SMS] Flow finished for ${order.external_id} with status ${result}`);
 
-    if (result === SmsFlowStatus.SUCCESS) {
-      Logger.info(`[SMS] Order ${order.external_id} SMS confirmed, waiting for bank status "Подтверждено"`);
-      await sendQrWhenBankConfirms(qrDeps, orderId, amount, bankConfirmOptions);
-    } else if (result === SmsFlowStatus.CANCELLED) {
-      Logger.info(`[SMS] Order ${order.external_id} SMS flow cancelled by user`);
-    } else if (result === SmsFlowStatus.ERROR_RECOVERY) {
-      Logger.warn(`[SMS] Order ${order.external_id} needs error recovery flow`);
-      const attempts = await registry.updateSmsAttempts(orderId);
-      if (attempts >= 3) {
-        await dispatcher.sendToAllowedChats(`🚫 ИИН ${orderId}: исчерпаны все 3 попытки ввода SMS-кода.\nТребуется ручное подтверждение заявки.`);
-        await registry.updateSmsStatus(orderId, 'SMS_BLOCKED');
-      } else {
-        await runSmsRecovery(orderId, amount, order, attempts);
+    // Accepted code, or the page misbehaved while the code may have gone through: the bank table decides
+    if (result === SmsFlowStatus.SUCCESS || result === SmsFlowStatus.NEEDS_BANK_CHECK) {
+      const sent = await sendQrWhenBankConfirms(qrDeps, orderId, amount, bankConfirmOptions);
+      if (!sent && result === SmsFlowStatus.SUCCESS) {
+        await dispatcher.sendToAllowedChats(BotText.bankNotConfirmedYet(orderId));
       }
     } else {
-      Logger.warn(`[SMS] Order ${order.external_id} SMS flow finished with timeout`);
+      await surveillance.closeSidebar(orderId).catch(() => {});
     }
   } catch (error) {
     Logger.error(`[SMS] Failed to process SMS confirmation for ${order.external_id}: ${error}`);
@@ -142,7 +124,7 @@ async function processSmsConfirmation(
     Logger.info(`[CYCLE] Monitoring resumed after SMS flow of ${orderId}`);
 
     try {
-      const rec = await registry.getSmsConfirmation(orderId);
+      const rec = await registry.getSmsConfirmation(orderId, amount);
       const incompleteStatuses: SmsStatus[] = ['WAITING_FOR_USER_ACTION', 'SMS_SENT'];
       if (rec && incompleteStatuses.includes(rec.status)) {
         await registry.updateSmsStatus(orderId, 'SMS_TIMEOUT');
@@ -152,7 +134,7 @@ async function processSmsConfirmation(
       // Request limit reached: processOrders stops starting new flows, notify once.
       // Final statuses (confirmed, refused, blocked, QR sent) are left untouched.
       if (rec && rec.sent_count >= SMS_MAX_REQUESTS && !FINAL_SMS_STATUSES.includes(rec.status)) {
-        await dispatcher.sendToAllowedChats(`⚠️ По заявке ${orderId} отправлено ${rec.sent_count} запросов СМС-подтверждения без результата. Ожидание прекращено.`);
+        await dispatcher.sendToAllowedChats(BotText.requestLimit(orderId, rec.sent_count));
         Logger.info(`[SMS] Limit of ${SMS_MAX_REQUESTS} requests reached for ${orderId}, halted SMS notifications`);
       }
     } catch (e) {
@@ -161,97 +143,19 @@ async function processSmsConfirmation(
   }
 }
 
-async function runSmsRecovery(orderId: string, amount: number, orderAttributes: any, attemptNumber: number): Promise<void> {
-  Logger.info(`[SMS] Recovery attempt ${attemptNumber}/3 for ${orderId}`);
+/**
+ * «В обработке» = the bank took the application after an SMS confirmation. The QR goes out only for
+ * orders whose code the bot itself got accepted recently — old or manual ones are left alone.
+ */
+async function processInProcessingOrder(order: { external_id: string; amount: number }): Promise<boolean> {
+  const rec = await registry.checkWithStatus(order.external_id, order.amount);
+  if (rec.dbError || rec.status === 'COMPLETED') return false;
 
-  await surveillance.hardRefresh();
-  await new Promise(resolve => setTimeout(resolve, 3000));
+  const smsRec = await registry.getSmsConfirmation(order.external_id, order.amount);
+  if (!shouldSendQrForInProcessing(smsRec, Date.now())) return false;
 
-  const stillPending = await surveillance.checkSmsConfirmationRequired(orderId);
-  if (!stillPending) {
-    // false is also returned when the row is missing or the page errored — not a proof of approval.
-    // No QR here: if the bank approved the order, the next cycle sees READY_FOR_QR and sends it.
-    Logger.info(`[SMS] Order ${orderId} no longer pending after refresh`);
-    await registry.updateSmsStatus(orderId, 'COMPLETED_EXTERNALLY');
-    return;
-  }
-
-  const sidebarOpened = await surveillance.openSidebarForOrder(orderId);
-  if (!sidebarOpened) {
-    Logger.error(`[SMS] Cannot open sidebar for ${orderId} in recovery`);
-    await registry.updateSmsStatus(orderId, 'SMS_TIMEOUT');
-    return;
-  }
-
-  const clicked = await surveillance.clickSendSmsButton(orderId);
-  if (!clicked) {
-    Logger.error(`[SMS] Cannot click SMS button for ${orderId} in recovery`);
-    await registry.updateSmsStatus(orderId, 'SMS_TIMEOUT');
-    return;
-  }
-
-  const screenshot = await surveillance.takeSmsScreenshot(orderId, 'input');
-  if (!screenshot) {
-    Logger.error(`[SMS] Cannot take screenshot for ${orderId} in recovery`);
-    return;
-  }
-
-  await dispatcher.sendSmsCodeRequest(orderId, screenshot, true, attemptNumber, amount);
-  await registry.updateSmsStatus(orderId, 'SMS_SENT');
-
-  const TIMEOUT_MS = 5 * 60 * 1000;
-  const newCode = await Promise.race([
-    new Promise<string | null>((resolve) => {
-      dispatcher.registerSmsCodeCallback(orderId, (code) => {
-        resolve(code === 'CANCELLED' ? null : code);
-      });
-    }),
-    new Promise<string | null>((resolve) => {
-      setTimeout(() => {
-        dispatcher.unregisterSmsCodeCallback(orderId);
-        resolve(null);
-      }, TIMEOUT_MS);
-    })
-  ]);
-
-  if (!newCode) {
-    Logger.warn(`[SMS] No code received in recovery for ${orderId}`);
-    await registry.updateSmsStatus(orderId, 'SMS_TIMEOUT');
-    return;
-  }
-
-  const entered = await surveillance.enterSmsCode(newCode, orderId);
-  if (!entered) return;
-
-  await new Promise(resolve => setTimeout(resolve, 3000));
-
-  const errorCheck = await surveillance.checkSmsErrorModal();
-  if (errorCheck.error || errorCheck.isBlocked) {
-    const newAttempts = await registry.updateSmsAttempts(orderId);
-    if (newAttempts >= 3) {
-      await dispatcher.sendToAllowedChats(`🚫 ИИН ${orderId}: исчерпаны все 3 попытки.\nТребуется ручное подтверждение.`);
-      await registry.updateSmsStatus(orderId, 'SMS_BLOCKED');
-      return;
-    }
-    await runSmsRecovery(orderId, amount, orderAttributes, newAttempts);
-    return;
-  }
-
-  await surveillance.clickConfirmButton(orderId);
-  const success = await surveillance.waitForSuccessPopup();
-  if (success) {
-    await registry.updateSmsStatus(orderId, 'SMS_CONFIRMED');
-    await dispatcher.sendToAllowedChats(`✅ СМС-код принят системой для заявки ${orderId}`);
-    await sendQrWhenBankConfirms(qrDeps, orderId, amount, bankConfirmOptions);
-  } else {
-    const newAttempts = await registry.updateSmsAttempts(orderId);
-    if (newAttempts >= 3) {
-      await dispatcher.sendToAllowedChats(`🚫 ИИН ${orderId}: исчерпаны все 3 попытки.\nТребуется ручное подтверждение.`);
-      await registry.updateSmsStatus(orderId, 'SMS_BLOCKED');
-      return;
-    }
-    await runSmsRecovery(orderId, amount, orderAttributes, newAttempts);
-  }
+  Logger.info(`[IN_PROCESSING] Code for ${order.external_id} was accepted, sending QR`);
+  return sendQrOnce(qrDeps, order.external_id, order.amount);
 }
 
 async function startKeepAliveServer(): Promise<void> {
@@ -305,6 +209,13 @@ async function processOrders(): Promise<void> {
 
           Logger.info(`[READY_FOR_QR] Processing order ${order.external_id}`);
           if (await sendQrOnce(qrDeps, order.external_id, order.amount)) {
+            processedCount++;
+          }
+          continue;
+        }
+
+        if (order.status === 'IN_PROCESSING') {
+          if (!isProcessingSms && await processInProcessingOrder(order)) {
             processedCount++;
           }
           continue;

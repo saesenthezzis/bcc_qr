@@ -2,5 +2,6 @@ export enum SmsFlowStatus {
   SUCCESS = 'SUCCESS',
   CANCELLED = 'CANCELLED',
   TIMEOUT = 'TIMEOUT',
-  ERROR_RECOVERY = 'ERROR_RECOVERY',
+  /** The code could not be entered/checked on the page — the bank table decides whether to send the QR. */
+  NEEDS_BANK_CHECK = 'NEEDS_BANK_CHECK',
 }

@@ -1,4 +1,11 @@
-export type OrderStatus = 'READY_FOR_QR' | 'PENDING';
+/** IN_PROCESSING = «В обработке»: the bank took the confirmed application. QR is sent for it only right after our own SMS flow. */
+export type OrderStatus = 'READY_FOR_QR' | 'PENDING' | 'IN_PROCESSING';
+
+/** What the bank page showed after one SMS code was submitted. */
+export type SmsCodeResult = 'ACCEPTED' | 'WRONG' | 'BLOCKED' | 'FAILED';
+
+/** How the whole code-entry dialog with the store staff ended. */
+export type SmsCodeLoopOutcome = 'ACCEPTED' | 'BLOCKED' | 'TOO_MANY_WRONG' | 'NO_CODE' | 'CANCELLED' | 'FAILED';
 export type ProcessStatus = 'PENDING' | 'PROCESSING' | 'READY_FOR_QR' | 'COMPLETED';
 export type SmsStatus =
   | 'WAITING_FOR_USER_ACTION'

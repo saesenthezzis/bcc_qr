@@ -567,7 +567,7 @@ export class RegistryAgent {
 
   // SMS Locking Methods
 
-  async acquireSmsLock(orderId: string): Promise<boolean> {
+  async acquireSmsLock(orderId: string, amount: number): Promise<boolean> {
     const TEN_MINUTES_MS = 10 * 60 * 1000;
     const now = new Date();
     
@@ -613,7 +613,8 @@ export class RegistryAgent {
           .from('sms_confirmations')
           .insert({
             external_id: orderId,
-            amount: 0, // Will be updated later when actual amount is known
+            // Real amount: processOrders looks the record up by (external_id, amount)
+            amount: amount,
             status: 'WAITING_FOR_USER_ACTION',
             sms_attempts: 0,
             sent_count: 0,

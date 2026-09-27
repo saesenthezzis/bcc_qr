@@ -75,6 +75,23 @@ const GRACEFUL_RESTART_HOURS = 3;
 const BANK_CONFIRM_POLL_MS = 10 * 1000;
 const BANK_CONFIRM_TIMEOUT_MS = 3 * 60 * 1000;
 
+/** Алматы UTC+5. Ночной окно: 22:30–09:00 — бот спит. */
+function isAlmatyNight(): boolean {
+  const almatyHour = new Date().getUTCHours() + 5;
+  const almatyMinute = new Date().getUTCMinutes();
+  const minutesSinceMidnight = almatyHour * 60 + almatyMinute;
+  return minutesSinceMidnight >= 22 * 60 + 30 || minutesSinceMidnight < 9 * 60;
+}
+
+function msUntilAlmaty(targetHour: number, targetMinute: number): number {
+  const now = new Date();
+  const almaty = new Date(now.getTime() + 5 * 60 * 60 * 1000);
+  let target = new Date(almaty);
+  target.setHours(targetHour, targetMinute, 0, 0);
+  if (target <= almaty) target.setDate(target.getDate() + 1);
+  return target.getTime() - almaty.getTime();
+}
+
 // sent_count = number of SMS confirmation requests posted to chat (incremented once per flow in Dispatcher)
 const SMS_MAX_REQUESTS = 5;
 const FINAL_SMS_STATUSES: SmsStatus[] = [
@@ -403,6 +420,14 @@ async function main(): Promise<void> {
         if (isMonitoringPaused) {
           Logger.info('[CYCLE] Monitoring is paused, skipping cycle');
           await new Promise(resolve => setTimeout(resolve, 60000));
+          continue;
+        }
+
+        // Night mode: skip cycles 22:30–09:00 Almaty
+        if (isAlmatyNight()) {
+          const sleepMs = msUntilAlmaty(9, 0);
+          Logger.info(`[NIGHT] Оффлайн до 09:00 Алматы, просыпаюсь через ${Math.round(sleepMs / 60000)} мин`);
+          await new Promise(resolve => setTimeout(resolve, sleepMs));
           continue;
         }
 

@@ -575,12 +575,14 @@ export class SurveillanceAgent extends EventEmitter {
 
       this.logger.info('Surveillance: SMS code submitted');
 
+      // Code input closed → then dismiss any success modal that appeared
       try {
-        await this.page!.waitForSelector('.bcc-modal', { state: 'hidden', timeout: 60000 });
-        this.logger.info('Surveillance: SMS modal closed');
-      } catch (modalError) {
-        this.logger.debug('Surveillance: SMS modal not found or already hidden');
+        await this.page!.waitForSelector(SMS_CODE_DIALOG, { state: 'hidden', timeout: 15000 });
+        this.logger.info('Surveillance: Code dialog closed');
+      } catch {
+        this.logger.debug('Surveillance: Code dialog not found');
       }
+      await this.dismissLeftoverModal();
 
       await this.page!.waitForSelector('.bcc-table-body', { timeout: 60000, state: 'visible' });
       this.logger.info('Surveillance: Table loaded after SMS verification');
@@ -1219,7 +1221,10 @@ export class SurveillanceAgent extends EventEmitter {
     try {
       // The bank may submit by itself after the last digit
       const early = await this.waitSmsCodeOutcome(1500);
-      if (early) return this.logSmsCodeResult(orderId, early);
+      if (early) {
+        if (early === 'ACCEPTED') await this.dismissLeftoverModal();
+        return this.logSmsCodeResult(orderId, early);
+      }
 
       const button = await this.findConfirmButton();
       if (!button) {
@@ -1233,7 +1238,9 @@ export class SurveillanceAgent extends EventEmitter {
         this.logger.warn(`Surveillance: Confirm click failed for ${orderId} - ${error}`);
       });
 
-      return this.logSmsCodeResult(orderId, (await this.waitSmsCodeOutcome(15000)) ?? 'WRONG');
+      const result = await this.waitSmsCodeOutcome(15000) ?? 'WRONG';
+      if (result === 'ACCEPTED') await this.dismissLeftoverModal();
+      return this.logSmsCodeResult(orderId, result);
     } catch (error) {
       this.logger.error(`Surveillance: Failed to submit SMS code for ${orderId} - ${error}`);
       return 'FAILED';
@@ -1274,6 +1281,40 @@ export class SurveillanceAgent extends EventEmitter {
       return false;
     } catch (error) {
       this.logger.error(`Surveillance: Failed to verify SMS completion for ${orderId} - ${error}`);
+      return false;
+    }
+  }
+
+  /** Dismisses a leftover bank modal after SMS code acceptance (success / return button). Returns true if dismissed. */
+  private async dismissLeftoverModal(): Promise<boolean> {
+    if (!this.page) return false;
+    try {
+      const modal = await this.page.$('div.bcc-modal.bcc-modal_show, div[role="dialog"]').catch(() => null);
+      if (!modal || !(await modal.isVisible().catch(() => false))) return true;
+
+      const returnSelectors = [
+        'button:has-text("Return to Cashier\'s Cabinet")',
+        'button:has-text("Вернуться в кабинет")',
+        'button:has-text("Return")',
+        'button.bcc-button:has-text("Кабинет")',
+        'div.bcc-modal_container button',
+      ];
+      for (const selector of returnSelectors) {
+        const btn = await this.page.$(selector).catch(() => null);
+        if (btn && await btn.isVisible().catch(() => false)) {
+          await btn.click({ timeout: 5000 });
+          this.logger.info('Surveillance: Success modal dismissed via button');
+          await this.page.waitForTimeout(1000);
+          return true;
+        }
+      }
+
+      await this.page.keyboard.press('Escape');
+      this.logger.info('Surveillance: Success modal dismissed via Escape');
+      await this.page.waitForTimeout(1000);
+      return true;
+    } catch (e) {
+      this.logger.warn(`Surveillance: Failed to dismiss leftover modal - ${e}`);
       return false;
     }
   }

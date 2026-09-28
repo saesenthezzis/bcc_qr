@@ -34,7 +34,7 @@ export class DispatcherAgent {
   private bot: Telegraf<Context>;
   private allowedChats: ChatWithThread[];
   private adminChatId: number | null;
-  private silentMode: boolean = true;
+  private silentMode: boolean = false;
   private readonly logger: Logger;
   private surveillanceAgent: SurveillanceAgent | null = null;
   private isWaitingForSms: boolean = false;

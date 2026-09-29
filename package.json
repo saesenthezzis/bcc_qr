@@ -7,7 +7,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsc && node dist/index.js",
-    "test": "tsc && node dist/utils/InstallmentMapper.test.js && node dist/agents/Registry.claim.check.js && node dist/utils/qrDelivery.check.js && node dist/utils/smsCodeLoop.check.js",
+    "test": "tsc && node dist/utils/InstallmentMapper.test.js && node dist/agents/Registry.claim.check.js && node dist/utils/qrDelivery.check.js && node dist/utils/smsCodeLoop.check.js && node dist/utils/smsAskTracker.check.js",
     "test:live": "tsc && node dist/index.live.js",
     "test:sms:inject": "ts-node test-sms-inject.ts",
     "test:sms": "npm run test:sms:inject && npm run dev"

@@ -10,6 +10,7 @@ import { SmsFlowStatus } from './types/SmsFlowStatus';
 import { BankConfirmOptions, QrDeliveryDeps, sendQrOnce, sendQrWhenBankConfirms } from './utils/qrDelivery';
 import { BotText } from './utils/botMessages';
 import { shouldSendQrForInProcessing } from './utils/inProcessingRule';
+import { FlowEnd, SmsAskTracker } from './utils/smsAskTracker';
 
 config();
 
@@ -54,9 +55,6 @@ const dispatcher = new DispatcherAgent(
   process.env.TELEGRAM_ADMIN_ID,
   surveillance
 );
-dispatcher.setOnConfirmQr(async (orderId, amount) => {
-  return await sendQrOnce(qrDeps, orderId, amount);
-});
 
 surveillance.on('smsRequired', async ({ screenshot, timestamp }) => {
   Logger.info('Event: SMS required, notifying admin...');
@@ -103,9 +101,11 @@ const FINAL_SMS_STATUSES: SmsStatus[] = [
   'SMS_BLOCKED',
   'COMPLETED_EXTERNALLY',
   'SMS_BUTTON_NOT_FOUND',
-  'IGNORED',
-  'SMS_TIMEOUT',
 ];
+
+// "Send SMS?" asks per order (ИИН + amount). The DB counter is shared by all orders with the same masked ИИН.
+const askTracker = new SmsAskTracker(SMS_MAX_REQUESTS);
+dispatcher.setOnResumeSms((orderId, amount) => askTracker.resume(orderId, amount));
 
 // Global monitoring pause flag
 let isMonitoringPaused: boolean = false;
@@ -120,10 +120,19 @@ surveillance.setPauseCallback((paused: boolean) => {
 const qrDeps: QrDeliveryDeps = { registry, generator, dispatcher, surveillance };
 const bankConfirmOptions: BankConfirmOptions = { pollMs: BANK_CONFIRM_POLL_MS, timeoutMs: BANK_CONFIRM_TIMEOUT_MS };
 
+/** Maps how the flow ended (and whether the QR went out) to the ask limit. */
+function flowEnd(result: SmsFlowStatus, qrSent: boolean): FlowEnd {
+  if (result === SmsFlowStatus.SUCCESS || qrSent) return 'CONFIRMED';
+  if (result === SmsFlowStatus.STOPPED) return 'STOPPED';
+  if (result === SmsFlowStatus.CANCELLED || result === SmsFlowStatus.NEEDS_BANK_CHECK) return 'DECLINED';
+  return 'NO_ANSWER';
+}
+
 async function processSmsConfirmation(
   orderId: string,
   amount: number,
-  order: { external_id: string; amount: number }
+  order: { external_id: string; amount: number },
+  skipQuestion = false
 ): Promise<void> {
   isProcessingSms = true;
   isMonitoringPaused = true;
@@ -133,18 +142,27 @@ async function processSmsConfirmation(
   Logger.info(`[CYCLE] Monitoring paused for SMS flow of ${orderId}`);
 
   try {
-    const result = await dispatcher.performSmsFlow(orderId, amount);
+    const result = await dispatcher.performSmsFlow(orderId, amount, skipQuestion);
     Logger.info(`[SMS] Flow finished for ${order.external_id} with status ${result}`);
 
+    let qrSent = false;
     // Accepted code, or the page misbehaved while the code may have gone through: the bank table decides
     if (result === SmsFlowStatus.SUCCESS || result === SmsFlowStatus.NEEDS_BANK_CHECK) {
-      const sent = await sendQrWhenBankConfirms(qrDeps, orderId, amount, bankConfirmOptions);
-      if (!sent && result === SmsFlowStatus.SUCCESS) {
+      qrSent = await sendQrWhenBankConfirms(qrDeps, orderId, amount, bankConfirmOptions);
+      if (!qrSent && result === SmsFlowStatus.SUCCESS) {
         await dispatcher.sendToAllowedChats(BotText.bankNotConfirmedYet(orderId));
       }
     } else {
       await surveillance.closeSidebar(orderId).catch(() => {});
     }
+
+    const end = flowEnd(result, qrSent);
+    const parked = askTracker.finish(orderId, amount, end);
+    // STOPPED already posted its own message with the button
+    if (parked && end !== 'STOPPED') {
+      await dispatcher.sendWithResumeButton(orderId, amount, BotText.smsParked(orderId, amount));
+    }
+    if (parked) Logger.info(`[SMS] ${orderId} (${amount}) parked after ${end}, waiting for the resend button`);
   } catch (error) {
     Logger.error(`[SMS] Failed to process SMS confirmation for ${order.external_id}: ${error}`);
   } finally {
@@ -162,13 +180,7 @@ async function processSmsConfirmation(
         await registry.updateSmsStatus(orderId, 'SMS_TIMEOUT');
         Logger.warn(`[SMS] Auto-updated status to SMS_TIMEOUT for ${orderId}`);
       }
-
-      // Request limit reached: processOrders stops starting new flows, notify once.
-      // Final statuses (confirmed, refused, blocked, QR sent) are left untouched.
-      if (rec && rec.sent_count >= SMS_MAX_REQUESTS && !FINAL_SMS_STATUSES.includes(rec.status)) {
-        await dispatcher.sendToAllowedChats(BotText.requestLimit(orderId, rec.sent_count));
-        Logger.info(`[SMS] Limit of ${SMS_MAX_REQUESTS} requests reached for ${orderId}, halted SMS notifications`);
-      }
+      // The ask limit and the stop message live in askTracker (see above)
     } catch (e) {
       Logger.error(`[SMS] Failed to auto-update status in finally: ${e}`);
     }
@@ -284,9 +296,16 @@ async function processOrders(): Promise<void> {
             continue;
           }
 
-          const smsRec = await registry.getSmsConfirmation(order.external_id, order.amount);
-          if (smsRec) {
-            if (FINAL_SMS_STATUSES.includes(smsRec.status) || smsRec.sent_count >= SMS_MAX_REQUESTS) {
+          const start = askTracker.canStart(order.external_id, order.amount);
+          if (start === 'NO') {
+            Logger.debug(`[SMS] ${order.external_id} (${order.amount}) is parked, waiting for the resend button`);
+            continue;
+          }
+
+          // The resend button overrides old DB statuses and counters
+          if (start === 'ASK') {
+            const smsRec = await registry.getSmsConfirmation(order.external_id, order.amount);
+            if (smsRec && (FINAL_SMS_STATUSES.includes(smsRec.status) || smsRec.sent_count >= SMS_MAX_REQUESTS)) {
               Logger.debug(`[SMS] Order ${order.external_id} has final status (${smsRec.status}) or reached request limit (${smsRec.sent_count}/${SMS_MAX_REQUESTS}), skip`);
               continue;
             }
@@ -330,7 +349,7 @@ async function processOrders(): Promise<void> {
           void processSmsConfirmation(order.external_id, order.amount, {
             external_id: order.external_id,
             amount: order.amount,
-          });
+          }, start === 'RESUME');
           smsCount++;
           break;
         }

@@ -54,6 +54,9 @@ const dispatcher = new DispatcherAgent(
   process.env.TELEGRAM_ADMIN_ID,
   surveillance
 );
+dispatcher.setOnConfirmQr(async (orderId, amount) => {
+  return await sendQrOnce(qrDeps, orderId, amount);
+});
 
 surveillance.on('smsRequired', async ({ screenshot, timestamp }) => {
   Logger.info('Event: SMS required, notifying admin...');
@@ -100,6 +103,8 @@ const FINAL_SMS_STATUSES: SmsStatus[] = [
   'SMS_BLOCKED',
   'COMPLETED_EXTERNALLY',
   'SMS_BUTTON_NOT_FOUND',
+  'IGNORED',
+  'SMS_TIMEOUT',
 ];
 
 // Global monitoring pause flag

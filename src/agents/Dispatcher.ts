@@ -45,6 +45,7 @@ export class DispatcherAgent {
   /** Orders whose "send SMS?" question is open — the send button is ignored at any other step. */
   private awaitingDecision: Set<string> = new Set();
   private readonly MESSAGE_REF_TTL_MS = 24 * 60 * 60 * 1000;
+  private onConfirmQr: ((orderId: string, amount: number) => Promise<boolean>) | null = null;
 
   constructor(botToken: string, chatIds: string[], logger: Logger, adminId?: string, surveillanceAgent?: SurveillanceAgent) {
     this.bot = new Telegraf(botToken);
@@ -450,6 +451,39 @@ export class DispatcherAgent {
         ctx.reply('✅ Авторизовано. Система CreditBridge активна.');
       } else {
         ctx.reply('❌ Доступ запрещён.');
+      }
+    });
+
+    this.bot.command('confirm', async (ctx) => {
+      const chatId = ctx.chat?.id.toString();
+      if (!this.isAuthorized(chatId)) {
+        await ctx.reply('❌ Unauthorized');
+        return;
+      }
+      const arg = ctx.payload as string;
+      if (!arg) {
+        await ctx.reply('❌ Использование: /confirm [иин_заказа]');
+        return;
+      }
+      if (!this.surveillanceAgent) {
+        await ctx.reply('❌ Ошибка: агент наблюдения не инициализирован.');
+        return;
+      }
+      const { status, amount } = await this.surveillanceAgent.getOrderStatus(arg.trim());
+      if (!status || !amount) {
+        await ctx.reply(`❌ Заявка ${arg.trim()} не найдена в таблице банка.`);
+        return;
+      }
+      if (status === 'READY_FOR_QR' || status === 'IN_PROCESSING') {
+        if (this.onConfirmQr) {
+          await ctx.reply(`✅ Заявка ${arg.trim()} подтверждена (статус: ${status}), отправляю QR...`);
+          const ok = await this.onConfirmQr(arg.trim(), amount);
+          await ctx.reply(ok ? '✅ QR отправлен.' : '❌ Не удалось отправить QR.');
+        } else {
+          await ctx.reply('❌ Callback не настроен.');
+        }
+      } else {
+        await ctx.reply(`⚠️ Заявка ${arg.trim()} ещё не подтверждена (статус: ${status}). Подтвердите в кабинете.`);
       }
     });
 
@@ -1090,5 +1124,9 @@ export class DispatcherAgent {
 
   get getHandleTelegramError(): (error: any, context: string) => Promise<void> {
     return this.handleTelegramError;
+  }
+
+  setOnConfirmQr(cb: (orderId: string, amount: number) => Promise<boolean>): void {
+    this.onConfirmQr = cb;
   }
 }

@@ -1631,6 +1631,19 @@ export class SurveillanceAgent extends EventEmitter {
     return this.pauseCallback || null;
   }
 
+  async getOrderStatus(orderId: string): Promise<{ status: OrderStatus | null; amount: number | null }> {
+    if (!this.page) return { status: null, amount: null };
+    try {
+      await this.page.waitForSelector('.bcc-table-body__row', { state: 'visible', timeout: 15000 }).catch(() => {});
+      const orders = await this.extractOrders();
+      const order = orders.find(o => o.external_id === orderId);
+      if (order) return { status: order.status, amount: order.amount };
+      return { status: null, amount: null };
+    } catch {
+      return { status: null, amount: null };
+    }
+  }
+
   async getStatus(): Promise<{ isProcessingSms: boolean; currentSmsOrderId: string | null; isMonitoringPaused: boolean }> {
     if (!this.registry) {
       return { isProcessingSms: false, currentSmsOrderId: null, isMonitoringPaused: this.isMonitoringPaused };

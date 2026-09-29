@@ -172,6 +172,15 @@ export class DispatcherAgent {
         await this.handleSmsCancellation(orderId, ctx);
         return;
       }
+
+      // Handle "confirmed, send QR" button
+      if (callbackData.startsWith('confirm_order:')) {
+        const parts = callbackData.split(':');
+        const orderId = parts[1];
+        const amount = parseFloat(parts[2]);
+        await this.handleConfirmOrder(orderId, amount, ctx);
+        return;
+      }
     });
 
     this.bot.on('text', async (ctx, next) => {
@@ -602,6 +611,25 @@ export class DispatcherAgent {
     }
   }
 
+  /** Too-many-wrong message with a "confirmed, send QR" button. */
+  private async sendTooManyWrongWithButton(orderId: string, amount: number): Promise<void> {
+    const keyboard = {
+      inline_keyboard: [[
+        { text: '✅ Подтвердил, отправь QR', callback_data: `confirm_order:${orderId}:${amount}` },
+      ]],
+    };
+    for (const { chatId, threadId } of this.getNotificationChats()) {
+      try {
+        await this.bot.telegram.sendMessage(chatId, BotText.tooManyWrong(orderId), {
+          reply_markup: keyboard,
+          message_thread_id: threadId,
+        });
+      } catch (sendError) {
+        await this.handleTelegramError(sendError, `sendTooManyWrongWithButton to ${chatId}`);
+      }
+    }
+  }
+
   async sendStartupNotification(): Promise<void> {
     if (!this.adminChatId) {
       this.logger.warn('Dispatcher: ADMIN_ID not configured, startup notification skipped');
@@ -884,6 +912,36 @@ export class DispatcherAgent {
     }
   }
 
+  /** "I confirmed in the bank, send QR" button handler. */
+  private async handleConfirmOrder(orderId: string, amount: number, ctx: any): Promise<void> {
+    try {
+      await ctx.answerCbQuery('Проверяю статус…');
+      if (!this.surveillanceAgent) {
+        await ctx.reply('❌ Агент наблюдения недоступен.');
+        return;
+      }
+      const { status } = await this.surveillanceAgent.getOrderStatus(orderId);
+      if (!status) {
+        await ctx.reply(`❌ Заявка ${orderId} не найдена в таблице банка.`);
+        return;
+      }
+      if (status === 'READY_FOR_QR' || status === 'IN_PROCESSING') {
+        if (this.onConfirmQr) {
+          await ctx.reply(`✅ Заявка ${orderId} подтверждена (статус: ${status}), отправляю QR…`);
+          const ok = await this.onConfirmQr(orderId, amount);
+          await ctx.reply(ok ? '✅ QR отправлен.' : '❌ Не удалось отправить QR.');
+        } else {
+          await ctx.reply('❌ Callback не настроен.');
+        }
+      } else {
+        await ctx.reply(`⚠️ Заявка ${orderId} ещё не подтверждена (статус: ${status}). Подтвердите в кабинете.`);
+      }
+    } catch (error) {
+      this.logger.error(`Dispatcher: handleConfirmOrder error for ${orderId} - ${error}`);
+      await ctx.reply('❌ Ошибка при проверке заявки.').catch(() => {});
+    }
+  }
+
   /** Edits every "enter the code" message (it is a photo, so the caption changes). */
   async updateCountdownMessage(orderId: string, caption: string): Promise<void> {
     for (const ref of this.getMessageRefs(this.codeMessageRefs, orderId)) {
@@ -1005,7 +1063,7 @@ export class DispatcherAgent {
         await this.syncSmsStatus(orderId, amount, 'SMS_TIMEOUT');
         return SmsFlowStatus.TIMEOUT;
       case 'TOO_MANY_WRONG':
-        await this.sendToAllowedChats(BotText.tooManyWrong(orderId));
+        await this.sendTooManyWrongWithButton(orderId, amount);
         await this.syncSmsStatus(orderId, amount, 'SMS_BLOCKED');
         return SmsFlowStatus.TIMEOUT;
       case 'BLOCKED':

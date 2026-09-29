@@ -46,7 +46,7 @@ export const BotText = {
   // Step 3: result
   codeAccepted: (orderId: string): string => `✅ Код принят. Заявка ${orderId}, готовлю QR.`,
   tooManyWrong: (orderId: string): string =>
-    `🚫 Код неправильный, попытки закончились.\nПодтвердите заявку ${orderId} в кабинете вручную.`,
+    `🚫 Код неправильный, попытки закончились.\nПодтвердите заявку ${orderId} в кабинете вручную.\n\nЕсли уже подтвердил — нажми кнопку ниже:`,
   codeBlocked: (orderId: string): string =>
     `🚫 Банк заблокировал ввод кода по заявке ${orderId}.\nПодтвердите её в кабинете или позвоните в поддержку: 605.`,
   codeNotEntered: (orderId: string): string =>

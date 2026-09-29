@@ -933,8 +933,16 @@ export class DispatcherAgent {
         } else {
           await ctx.reply('❌ Callback не настроен.');
         }
+      } else if (status === 'PENDING') {
+        await ctx.reply(`⚠️ Заявка ${orderId} ещё не подтверждена. Отправляю SMS-подтверждение.`);
+        const sent = await this.sendSmsConfirmationRequest(orderId, amount);
+        if (sent) {
+          await ctx.reply(`📲 SMS отправлен. Введите код из SMS.`);
+        } else {
+          await ctx.reply('❌ Не удалось отправить SMS. Попробуйте в кабинете.');
+        }
       } else {
-        await ctx.reply(`⚠️ Заявка ${orderId} ещё не подтверждена (статус: ${status}). Подтвердите в кабинете.`);
+        await ctx.reply(`⚠️ Заявка ${orderId} в неизвестном статусе: ${status}.`);
       }
     } catch (error) {
       this.logger.error(`Dispatcher: handleConfirmOrder error for ${orderId} - ${error}`);

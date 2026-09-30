@@ -1,4 +1,4 @@
-import { chromium, Browser, BrowserContext, ElementHandle, Page } from 'playwright';
+import { chromium, Browser, BrowserContext, ElementHandle, Locator, Page } from 'playwright';
 import * as path from 'path';
 import * as fs from 'fs';
 import { Logger } from '../utils/Logger';
@@ -700,6 +700,7 @@ export class SurveillanceAgent extends EventEmitter {
     }
 
     try {
+      await this.dismissLeftoverModal(0);
       const refreshButton = await this.page.$('button.bcc-button_iconOnly');
       if (refreshButton) {
         await refreshButton.click();
@@ -728,6 +729,7 @@ export class SurveillanceAgent extends EventEmitter {
     const orders: Order[] = [];
 
     try {
+      await this.dismissLeftoverModal(0);
       await this.page.waitForSelector('.bcc-table-body__row', { timeout: 60000 });
       await this.takeDebugScreenshot('table_ready');
 
@@ -1259,11 +1261,7 @@ export class SurveillanceAgent extends EventEmitter {
 
     try {
       // The table status is the only proof; a leftover info modal must not block the refresh click
-      const modalVisible = await this.page.$('.bcc-modal.bcc-modal_show').then(el => el?.isVisible() ?? false).catch(() => false);
-      if (modalVisible) {
-        await this.page.keyboard.press('Escape').catch(() => {});
-        await this.page.waitForTimeout(500);
-      }
+      await this.dismissLeftoverModal(0);
 
       await this.softRefresh();
       await this.page.waitForTimeout(2000);
@@ -1285,38 +1283,46 @@ export class SurveillanceAgent extends EventEmitter {
     }
   }
 
-  /** Dismisses a leftover bank modal after SMS code acceptance (success / return button). Returns true if dismissed. */
-  private async dismissLeftoverModal(): Promise<boolean> {
+  /**
+   * Closes the bank's "Отправили заявку в обработку" modal with its «Вернуться в Кабинет кассира» button.
+   * The modal shows up a few seconds after the code dialog closes, so waitMs > 0 waits for it.
+   * While it is open the page behind it does not refresh and the bot hangs on table timeouts.
+   */
+  private async dismissLeftoverModal(waitMs = 10000): Promise<boolean> {
     if (!this.page) return false;
+    const page = this.page;
+    const modal = page.locator('div.bcc-modal.bcc-modal_show, div[role="dialog"]').filter({ hasText: /обработку|Кабинет кассира|Cashier/i }).first();
     try {
-      const modal = await this.page.$('div.bcc-modal.bcc-modal_show, div[role="dialog"]').catch(() => null);
-      if (!modal || !(await modal.isVisible().catch(() => false))) return true;
+      if (waitMs > 0) {
+        await modal.waitFor({ state: 'visible', timeout: waitMs }).catch(() => {});
+      }
+      if (!(await modal.isVisible().catch(() => false))) return true;
 
-      const returnSelectors = [
-        'button:has-text("Return to Cashier\'s Cabinet")',
-        'button:has-text("Вернуться в кабинет")',
-        'button:has-text("Return")',
-        'button.bcc-button:has-text("Кабинет")',
-        'div.bcc-modal_container button',
-      ];
-      for (const selector of returnSelectors) {
-        const btn = await this.page.$(selector).catch(() => null);
-        if (btn && await btn.isVisible().catch(() => false)) {
-          await btn.click({ timeout: 5000 });
-          this.logger.info('Surveillance: Success modal dismissed via button');
-          await this.page.waitForTimeout(1000);
-          return true;
-        }
+      const returnButton = page.getByRole('button', { name: /Вернуться в кабинет кассира|Return to Cashier/i }).first();
+      if (await returnButton.isVisible().catch(() => false)) {
+        await returnButton.click({ timeout: 5000 }).catch((e) => this.logger.warn(`Surveillance: Return button click failed - ${e}`));
+      }
+      if (await this.waitHidden(modal, 5000)) {
+        this.logger.info('Surveillance: Success modal closed via «Вернуться в Кабинет кассира»');
+        await this.takeDebugScreenshot('success_modal_closed');
+        return true;
       }
 
-      await this.page.keyboard.press('Escape');
-      this.logger.info('Surveillance: Success modal dismissed via Escape');
-      await this.page.waitForTimeout(1000);
-      return true;
+      // Fallback: the cross in the corner, then Escape
+      await modal.locator('button[aria-label="Close"], .bcc-modal__close, button:has(svg)').first().click({ timeout: 3000 }).catch(() => {});
+      if (!(await this.waitHidden(modal, 2000))) await page.keyboard.press('Escape').catch(() => {});
+      const closed = await this.waitHidden(modal, 3000);
+      this.logger[closed ? 'info' : 'warn'](`Surveillance: Success modal ${closed ? 'closed via fallback' : 'is still open'}`);
+      await this.takeDebugScreenshot(closed ? 'success_modal_closed' : 'success_modal_stuck');
+      return closed;
     } catch (e) {
       this.logger.warn(`Surveillance: Failed to dismiss leftover modal - ${e}`);
       return false;
     }
+  }
+
+  private async waitHidden(locator: Locator, timeoutMs: number): Promise<boolean> {
+    return locator.waitFor({ state: 'hidden', timeout: timeoutMs }).then(() => true).catch(() => false);
   }
 
   async closeSidebar(orderId: string): Promise<void> {

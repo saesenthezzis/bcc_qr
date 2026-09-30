@@ -142,7 +142,7 @@ async function processSmsConfirmation(
   Logger.info(`[CYCLE] Monitoring paused for SMS flow of ${orderId}`);
 
   try {
-    const result = await dispatcher.performSmsFlow(orderId, amount, skipQuestion);
+    let result = await dispatcher.performSmsFlow(orderId, amount, skipQuestion);
     Logger.info(`[SMS] Flow finished for ${order.external_id} with status ${result}`);
 
     let qrSent = false;
@@ -150,7 +150,9 @@ async function processSmsConfirmation(
     if (result === SmsFlowStatus.SUCCESS || result === SmsFlowStatus.NEEDS_BANK_CHECK) {
       qrSent = await sendQrWhenBankConfirms(qrDeps, orderId, amount, bankConfirmOptions);
       if (!qrSent && result === SmsFlowStatus.SUCCESS) {
-        await dispatcher.sendToAllowedChats(BotText.bankNotConfirmedYet(orderId));
+        // Code looked accepted but the bank still shows «Подтвердить»: give the staff a way to retry
+        await dispatcher.sendWithResumeButton(orderId, amount, BotText.bankNotConfirmedYet(orderId));
+        result = SmsFlowStatus.STOPPED;
       }
     } else {
       await surveillance.closeSidebar(orderId).catch(() => {});

@@ -15,7 +15,7 @@ export class GeneratorAgent {
 
   private buildProtocolString(amount: number, bccCode: string): string {
     const formattedAmount = amount.toFixed(2);
-    return `AI1|${bccCode}|${GeneratorAgent.MERCHANT_ID}|${formattedAmount}|${GeneratorAgent.ACCOUNT}|${GeneratorAgent.BANK_CODE}|1|0.00|1`;
+    return `AH0|${bccCode}|${GeneratorAgent.MERCHANT_ID}|${formattedAmount}|${GeneratorAgent.ACCOUNT}|${GeneratorAgent.BANK_CODE}|1|0.00|1`;
   }
 
   async generateQR(amount: number, installmentPeriod?: string): Promise<Buffer> {

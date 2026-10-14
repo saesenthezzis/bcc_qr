@@ -39,9 +39,13 @@ const dispatcher = new DispatcherAgent(
   surveillance
 );
 
+if (dispatcher['adminChatId']) {
+  surveillance.setScreenshotSender((reason, buffer) => dispatcher.sendAllowedScreenshot(reason, buffer));
+}
+
 surveillance.on('smsRequired', async ({ screenshot, timestamp }) => {
   Logger.info('Event: SMS required, notifying admin...');
-  await dispatcher.sendSmsRequest(screenshot, timestamp);
+  await dispatcher.sendSmsRequest(screenshot, timestamp).catch(() => Logger.warn('Authorization text notification failed'));
 });
 
 async function retryRegistryOperation<T>(

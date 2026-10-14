@@ -56,19 +56,13 @@ const dispatcher = new DispatcherAgent(
   surveillance
 );
 
+if (dispatcher['adminChatId']) {
+  surveillance.setScreenshotSender((reason, buffer) => dispatcher.sendAllowedScreenshot(reason, buffer));
+}
+
 surveillance.on('smsRequired', async ({ screenshot, timestamp }) => {
   Logger.info('Event: SMS required, notifying admin...');
-  await dispatcher.sendSmsRequest(screenshot, timestamp);
-});
-
-surveillance.on('debugScreenshot', async ({ label, buffer, timestamp }) => {
-  if (!dispatcher['adminChatId']) return;
-  try {
-    const filename = `debug_${label}_${timestamp.replace(/[:.]/g, '-')}.png`;
-    await dispatcher.sendToAdminChat(buffer, `🔍 ${label}`, filename);
-  } catch (e) {
-    Logger.warn(`Debug screenshot send failed for ${label}: ${e}`);
-  }
+  await dispatcher.sendSmsRequest(screenshot, timestamp).catch(() => Logger.warn('Authorization text notification failed'));
 });
 
 const CHECK_INTERVAL_MS = (parseInt(process.env.CHECK_INTERVAL_MINUTES || '1') * 60 * 1000);
@@ -320,7 +314,7 @@ async function processOrders(): Promise<void> {
             continue;
           }
 
-          const hasSmsButton = await surveillance.checkSmsButtonExists();
+          const hasSmsButton = await surveillance.checkSmsButtonExists(order.external_id, order.amount);
 
           // Step 7: No SMS button -> generate QR directly
           if (!hasSmsButton) {

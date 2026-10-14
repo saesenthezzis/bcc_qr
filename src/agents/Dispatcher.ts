@@ -1,3 +1,4 @@
+import { isScreenshotReason, ScreenshotReason } from '../utils/routineScreenshots';
 import { Telegraf, Context } from 'telegraf';
 import { Logger } from '../utils/Logger';
 import { SurveillanceAgent } from './Surveillance';
@@ -512,39 +513,25 @@ export class DispatcherAgent {
 
     const errorMessage = error instanceof Error ? error.message : String(error);
     const timestamp = new Date().toISOString();
-    const filenameTimestamp = timestamp.replace(/[:.]/g, '-');
     const caption = `🚨 Ошибка в цикле мониторинга\n\n⏰ Время: ${timestamp}\n❗ Описание: ${errorMessage}`;
 
     try {
-      if (screenshot) {
-        await this.bot.telegram.sendPhoto(this.adminChatId, {
-          source: screenshot,
-          filename: `critical_error_${filenameTimestamp}.png`,
-        }, {
-          caption,
-        });
-      } else {
-        await this.bot.telegram.sendMessage(this.adminChatId, caption);
-      }
+      await this.bot.telegram.sendMessage(this.adminChatId, caption);
       this.logger.info(`Dispatcher: Error message sent to admin ${this.adminChatId}`);
     } catch (sendError) {
       await this.handleTelegramError(sendError, `sendErrorMessage to ${this.adminChatId}`);
     }
   }
 
-  async sendSmsRequest(screenshot: Buffer, timestamp: string): Promise<void> {
+  async sendSmsRequest(_screenshot: Buffer | null, timestamp: string): Promise<void> {
     if (!this.adminChatId) {
       this.logger.warn('Dispatcher: ADMIN_ID not configured, SMS request skipped');
       return;
     }
 
     try {
-      await this.bot.telegram.sendPhoto(this.adminChatId, {
-        source: screenshot,
-        filename: 'sms_verification.png',
-      }, {
-        caption: `🔐 Нужен код из SMS для входа в кабинет банка.\nПришлите цифры кода ответом.\n\n${timestamp}`,
-      });
+      await this.bot.telegram.sendMessage(this.adminChatId,
+        'Нужен код SMS для авторизации в кабинете банка. Пришлите код ответом.\n' + timestamp);
 
       this.isWaitingForSms = true;
       this.logger.info(`Dispatcher: SMS request sent to admin ${this.adminChatId}`);
@@ -591,21 +578,14 @@ export class DispatcherAgent {
     }
   }
 
-  /** Send a debug screenshot to admin chat only. */
-  async sendToAdminChat(photoBuffer: Buffer, caption: string, filename: string): Promise<void> {
-    if (!this.adminChatId) {
-      this.logger.warn('Dispatcher: ADMIN_ID not configured, debug screenshot skipped');
-      return;
-    }
-    try {
-      await this.bot.telegram.sendPhoto(this.adminChatId, {
-        source: photoBuffer,
-        filename,
-      }, { caption });
-      this.logger.debug(`Dispatcher: Debug screenshot sent to admin (${caption})`);
-    } catch (sendError) {
-      await this.handleTelegramError(sendError, `sendToAdminChat ${caption}`);
-    }
+  // Legacy debug delivery is disabled, including callers that still supply a buffer.
+  async sendToAdminChat(_photoBuffer: Buffer, _caption: string, _filename: string): Promise<void> {}
+
+  async sendAllowedScreenshot(reason: ScreenshotReason, buffer: Buffer): Promise<void> {
+    if (!isScreenshotReason(reason) || !this.adminChatId) return;
+    const caption = reason === 'authorization_required' ? 'Нужна авторизация' : 'Нет кнопки SMS';
+    // The durable episode was claimed before capture; do not retry even on uncertain delivery.
+    await this.bot.telegram.sendPhoto(this.adminChatId, { source: buffer, filename: reason + '.png' }, { caption });
   }
 
   async stop(): Promise<void> {
@@ -672,18 +652,14 @@ export class DispatcherAgent {
     }
   }
 
-  async sendSmsCodeRequest(orderId: string, screenshot: Buffer, caption: string): Promise<boolean> {
+  async sendSmsCodeRequest(orderId: string, _screenshot: Buffer | null, caption: string): Promise<boolean> {
     this.clearReplyContexts(orderId);
     this.codeMessageRefs.delete(orderId);
     let successCount = 0;
 
     for (const { chatId, threadId } of this.getNotificationChats()) {
       try {
-        const message = await this.bot.telegram.sendPhoto(chatId, {
-          source: screenshot,
-          filename: `sms_code_${orderId}.png`,
-        }, {
-          caption,
+        const message = await this.bot.telegram.sendMessage(chatId, caption, {
           message_thread_id: threadId,
         });
 
@@ -857,11 +833,11 @@ export class DispatcherAgent {
     }
   }
 
-  /** Edits every "enter the code" message (it is a photo, so the caption changes). */
+  /** Edits every "enter the code" message (text-only requests). */
   async updateCountdownMessage(orderId: string, caption: string): Promise<void> {
     for (const ref of this.getMessageRefs(this.codeMessageRefs, orderId)) {
       try {
-        await this.bot.telegram.editMessageCaption(ref.chatId, ref.messageId, undefined, caption);
+        await this.bot.telegram.editMessageText(ref.chatId, ref.messageId, undefined, caption);
       } catch (editError: any) {
         if (editError?.response?.description?.includes('message is not modified')) continue;
         await this.handleTelegramError(editError, `updateCountdownMessage to ${ref.chatId}`);
@@ -941,7 +917,7 @@ export class DispatcherAgent {
     }
   }
 
-  /** Step 2 (one attempt): posts the code request with a fresh screenshot and waits for the reply. */
+  /** Step 2 (one attempt): posts a text-only code request and waits for the reply. */
   private async askSmsCode(
     orderId: string,
     amount: number,
@@ -953,9 +929,7 @@ export class DispatcherAgent {
       ? BotText.waitingCode(orderId, amount, timeLeft)
       : BotText.wrongCode(orderId, attempt, maxAttempts, timeLeft);
 
-    const screenshot = await this.surveillanceAgent!.takeSmsScreenshot(orderId, 'input');
-    if (!screenshot) return null;
-    if (!(await this.sendSmsCodeRequest(orderId, screenshot, caption(formatTimeLeft(CODE_TIMEOUT_SEC))))) return null;
+    if (!(await this.sendSmsCodeRequest(orderId, null, caption(formatTimeLeft(CODE_TIMEOUT_SEC))))) return null;
 
     const code = await this.waitForAnswer(orderId, CODE_TIMEOUT_SEC, (timeLeft) =>
       this.updateCountdownMessage(orderId, caption(timeLeft))
@@ -1046,7 +1020,7 @@ export class DispatcherAgent {
       return SmsFlowStatus.NO_ANSWER;
     }
 
-    if (!(await surveillance.clickSendSmsButton(orderId))) {
+    if (!(await surveillance.clickSendSmsButton(orderId, amount))) {
       this.logger.error(`Failed to click Send SMS button for ${orderId} after user confirmation`);
       await this.sendToAllowedChats(BotText.codeNotEntered(orderId));
       await this.syncSmsStatus(orderId, amount, 'SMS_TIMEOUT');

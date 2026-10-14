@@ -15,6 +15,33 @@ export class RegistryAgent {
     this.logger = logger;
   }
 
+  // Dedicated rows in the existing table; never touch bcc_bank_session or its cookies.
+  async claimScreenshotEpisode(id: string): Promise<boolean> {
+    if (!id.startsWith('bcc_screenshot_')) return false;
+    try {
+      const { error } = await this.client.from('bot_sessions').insert({
+        id, data: { kind: 'screenshot_episode', attempted: true }, updated_at: new Date().toISOString(),
+      });
+      if (error && error.code !== '23505') this.logger.warn('Screenshot claim unavailable; photo suppressed');
+      return !error;
+    } catch {
+      this.logger.warn('Screenshot claim unavailable; photo suppressed');
+      return false;
+    }
+  }
+
+  async resetScreenshotEpisode(id: string): Promise<boolean> {
+    if (!id.startsWith('bcc_screenshot_')) return false;
+    try {
+      const { error } = await this.client.from('bot_sessions').delete().eq('id', id);
+      if (error) this.logger.warn('Screenshot recovery not persisted; photo remains suppressed');
+      return !error;
+    } catch {
+      this.logger.warn('Screenshot recovery not persisted; photo remains suppressed');
+      return false;
+    }
+  }
+
   private isMissingSmsLockColumnError(error: { message?: string } | null | undefined): boolean {
     const message = error?.message || '';
     return message.includes('sms_lock_acquired_at') || message.includes('sms_lock_order_id');

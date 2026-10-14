@@ -7,6 +7,7 @@ import { Order, OrderStatus, OrderData, SmsCodeResult } from '../types';
 import { getBccCode } from '../utils/InstallmentMapper';
 import { EventEmitter } from 'events';
 import { RegistryAgent } from './Registry';
+import { ScreenshotEpisodes, ScreenshotReason } from '../utils/routineScreenshots';
 
 const SMS_CODE_DIALOG = 'div[data-pw="input-code-container"]';
 const SMS_BLOCKED_MARKERS = ['несколько раз ввели неверно', 'заблокир'];
@@ -35,6 +36,8 @@ export class SurveillanceAgent extends EventEmitter {
   private smsCodePromise: Promise<string> | null = null;
   private resolveSmsCode: ((code: string) => void) | null = null;
   private registry: RegistryAgent | null = null;
+  private screenshotEpisodes: ScreenshotEpisodes | null = null;
+  private screenshotSender: ((reason: ScreenshotReason, buffer: Buffer) => Promise<void>) | null = null;
   private skipCallback: (() => Promise<string | null>) | null = null;
   private pauseCallback: ((paused: boolean) => void) | null = null;
   private isMonitoringPaused: boolean = false;
@@ -47,6 +50,7 @@ export class SurveillanceAgent extends EventEmitter {
     this.logger = logger;
     this.storagePath = path.join(process.cwd(), 'storage');
     this.registry = registry || null;
+    if (registry) this.screenshotEpisodes = new ScreenshotEpisodes(registry);
 
     if (!fs.existsSync(this.storagePath)) {
       fs.mkdirSync(this.storagePath, { recursive: true });
@@ -70,6 +74,29 @@ export class SurveillanceAgent extends EventEmitter {
 
   public setRegistry(registry: RegistryAgent): void {
     this.registry = registry;
+    this.screenshotEpisodes = new ScreenshotEpisodes(registry);
+  }
+
+  setScreenshotSender(sender: (reason: ScreenshotReason, buffer: Buffer) => Promise<void>): void {
+    this.screenshotSender = sender;
+  }
+
+  private async notifyScreenshot(reason: ScreenshotReason, scope = 'bank_login'): Promise<void> {
+    if (!this.page || !this.screenshotSender || !this.screenshotEpisodes) return;
+    try {
+      await this.screenshotEpisodes.attempt(reason, scope, async () => {
+        const buffer = await this.page!.screenshot({ type: 'png', fullPage: false,
+          mask: [this.page!.locator('input[type="password"]')] });
+        await this.screenshotSender!(reason, buffer);
+      });
+    } catch {
+      this.logger.warn('Allowed screenshot attempt failed; no photo retry until observed recovery');
+    }
+  }
+
+  private async recoverScreenshot(reason: ScreenshotReason, scope = 'bank_login'): Promise<void> {
+    try { await this.screenshotEpisodes?.recover(reason, scope); }
+    catch { this.logger.warn('Screenshot recovery unavailable; photo remains suppressed'); }
   }
 
   private async ensureCorrectUrl(): Promise<void> {
@@ -107,6 +134,8 @@ export class SurveillanceAgent extends EventEmitter {
       }
 
       const hasTable = await this.page.isVisible('.bcc-table-body').catch(() => false);
+      const hasLogin = await this.page.isVisible('input#username').catch(() => true);
+      if (hasTable && !hasLogin) await this.recoverScreenshot('authorization_required');
       return hasTable;
     } catch (error) {
       this.logger.warn(`Surveillance: Session check failed - ${error}`);
@@ -218,6 +247,9 @@ export class SurveillanceAgent extends EventEmitter {
       const pageState = await this.detectPageState();
 
       if (pageState === 'LOGGED_IN') {
+        if (!(await this.page!.isVisible('input#username').catch(() => true))) {
+          await this.recoverScreenshot('authorization_required');
+        }
         this.logger.info('Surveillance: Already logged in (session restored)');
         await this.saveSession(sessionPath);
         await this.takeDebugScreenshot('login_restored');
@@ -225,6 +257,7 @@ export class SurveillanceAgent extends EventEmitter {
       }
 
       if (pageState === 'LOGIN_FORM') {
+        await this.notifyScreenshot('authorization_required');
         this.logger.info('Surveillance: Login form detected, entering credentials');
         await this.performLogin(sessionPath);
         await this.takeDebugScreenshot('login_performed');
@@ -511,26 +544,8 @@ export class SurveillanceAgent extends EventEmitter {
       this.logger.warn('Surveillance: SMS input not fully visible, proceeding anyway');
     }
 
-    const screenshotPath = path.join(this.storagePath, 'sms_screenshot.png');
-    await this.page!.screenshot({
-      path: screenshotPath,
-      fullPage: false,
-    });
-
-    this.logger.info(`Surveillance: Screenshot saved to ${screenshotPath}`);
-
-    const screenshotBuffer = fs.readFileSync(screenshotPath);
-    this.emit('smsRequired', {
-      screenshot: screenshotBuffer,
-      timestamp: new Date().toISOString(),
-    });
-
-    try {
-      fs.unlinkSync(screenshotPath);
-      this.logger.debug(`Surveillance: Screenshot file cleaned up`);
-    } catch (unlinkError) {
-      this.logger.warn(`Surveillance: Failed to delete screenshot: ${unlinkError}`);
-    }
+    await this.notifyScreenshot('authorization_required');
+    this.emit('smsRequired', { screenshot: null, timestamp: new Date().toISOString() });
 
     this.logger.info('Surveillance: Waiting for SMS code from admin...');
     this.isWaitingForSms = true;
@@ -846,36 +861,10 @@ export class SurveillanceAgent extends EventEmitter {
     return this.isWaitingForSms;
   }
 
-  async takeErrorScreenshot(label = 'critical_failure'): Promise<Buffer | null> {
-    if (!this.page) {
-      this.logger.warn(`Surveillance: No page available for error screenshot (${label})`);
-      return null;
-    }
+  // Automatic screenshots are restricted to the two state-driven notifications above.
+  async takeErrorScreenshot(_label = 'critical_failure'): Promise<null> { return null; }
 
-    try {
-      return await this.page.screenshot({ type: 'png', fullPage: true });
-    } catch (error) {
-      this.logger.error(`Surveillance: Failed to take error screenshot (${label}) - ${error}`);
-      return null;
-    }
-  }
-
-  /** Debug screenshot for diagnostics — emits 'debugScreenshot' event for admin delivery. */
-  async takeDebugScreenshot(label = 'debug'): Promise<Buffer | null> {
-    if (!this.page) {
-      this.logger.warn(`Surveillance: No page for debug screenshot (${label})`);
-      return null;
-    }
-    try {
-      const buf = await this.page.screenshot({ type: 'png', fullPage: true });
-      this.logger.debug(`Surveillance: Debug screenshot #${label}`);
-      this.emit('debugScreenshot', { label, buffer: buf, timestamp: new Date().toISOString() });
-      return buf;
-    } catch (error) {
-      this.logger.error(`Surveillance: Failed debug screenshot (${label}) - ${error}`);
-      return null;
-    }
-  }
+  async takeDebugScreenshot(_label = 'debug'): Promise<null> { return null; }
 
   async close(): Promise<void> {
     if (!this.browser) {
@@ -915,7 +904,7 @@ export class SurveillanceAgent extends EventEmitter {
 
   // SMS Confirmation Methods
 
-  async clickSendSmsButton(orderId: string): Promise<boolean> {
+  async clickSendSmsButton(orderId: string, amount = 0): Promise<boolean> {
     // Mock mode
     if (process.env.BROWSER_MOCK === 'true') {
       this.logger.info(`[MOCK] Кнопка "Подтвердить заявку через SMS" нажата для ${orderId}`);
@@ -959,9 +948,12 @@ export class SurveillanceAgent extends EventEmitter {
       }
 
       if (!buttonClicked) {
+        await this.notifyScreenshot('sms_button_missing', orderId + ':' + amount);
         this.logger.warn(`Surveillance: Send SMS button not found with any selector for ${orderId}`);
         return false;
       }
+
+      await this.recoverScreenshot('sms_button_missing', orderId + ':' + amount);
 
       // Step 3: Wait for modal to appear
       try {
@@ -1108,62 +1100,8 @@ export class SurveillanceAgent extends EventEmitter {
     }
   }
 
-  async takeSmsScreenshot(orderId: string, type: 'input' | 'blocked'): Promise<Buffer | null> {
-    // Mock mode - create a simple mock screenshot
-    if (process.env.BROWSER_MOCK === 'true') {
-      this.logger.info(`[MOCK] Creating mock screenshot for ${orderId} (${type})`);
-      // Create a simple 1x1 PNG buffer as mock
-      const mockPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
-      return mockPng;
-    }
+  async takeSmsScreenshot(_orderId: string, _type: 'input' | 'blocked'): Promise<null> { return null; }
 
-    if (!this.page) {
-      throw new Error('Page not initialized. Call login() first.');
-    }
-
-    try {
-      this.logger.info('Surveillance: Looking for modal element for screenshot...');
-
-      // Wait for the modal to be fully rendered before taking screenshot
-      await this.page.waitForSelector('div.bcc-modal.bcc-modal_show, div[role="dialog"]', { timeout: 5000 });
-
-      // Try to get the specific modal element first
-      const modal = await this.page.$('div[role="dialog"], div.bcc-modal.bcc-modal_show');
-      this.logger.info(`Surveillance: Modal found: ${!!modal}`);
-
-      let buffer: Buffer;
-
-      if (!modal) {
-        // fallback — скриншот всей страницы
-        this.logger.info('Surveillance: Taking screenshot of full page as fallback');
-        const screenshotPath = path.join(this.storagePath, `sms_${type}_${orderId}.png`);
-        await this.page.screenshot({
-          path: screenshotPath,
-          type: 'png'
-        });
-        buffer = fs.readFileSync(screenshotPath);
-
-        // Clean up file
-        try {
-          fs.unlinkSync(screenshotPath);
-        } catch (unlinkError) {
-          this.logger.warn(`Surveillance: Failed to delete screenshot: ${unlinkError}`);
-        }
-      } else {
-        // Take screenshot of the modal element
-        this.logger.info('Surveillance: Taking screenshot of modal element');
-        buffer = await modal.screenshot({ type: 'png' });
-      }
-
-      this.logger.info('Surveillance: Screenshot taken for modal');
-      return buffer;
-    } catch (error) {
-      this.logger.error(`Surveillance: Failed to take screenshot for ${orderId} - ${error}`);
-      return null;
-    }
-  }
-
-  /** The SMS code dialog of the bank page is still on screen. */
   async isSmsCodeDialogOpen(): Promise<boolean> {
     if (process.env.BROWSER_MOCK === 'true') return false;
     if (!this.page) return false;
@@ -1497,7 +1435,7 @@ export class SurveillanceAgent extends EventEmitter {
     }
   }
 
-  async checkSmsButtonExists(): Promise<boolean> {
+  async checkSmsButtonExists(orderId = 'unknown', amount = 0): Promise<boolean> {
     if (!this.page) {
       throw new Error('Page not initialized. Call login() first.');
     }
@@ -1546,6 +1484,7 @@ export class SurveillanceAgent extends EventEmitter {
           const isVisible = await button.isVisible().catch(() => false);
           if (isVisible) {
             this.logger.info(`[INFO] ✅ SMS button FOUND with selector: ${selector}`);
+            await this.recoverScreenshot('sms_button_missing', orderId + ':' + amount);
             return true;
           }
         }
@@ -1559,12 +1498,14 @@ export class SurveillanceAgent extends EventEmitter {
           const isVisible = await button.isVisible().catch(() => false);
           if (isVisible) {
             this.logger.info(`[INFO] ✅ SMS button FOUND on retry with selector: ${selector}`);
+            await this.recoverScreenshot('sms_button_missing', orderId + ':' + amount);
             return true;
           }
         }
       }
 
       this.logger.warn('[INFO] ❌ SMS button NOT FOUND in sidebar');
+      await this.notifyScreenshot('sms_button_missing', orderId + ':' + amount);
       return false;
     } catch (error) {
       this.logger.error(`Surveillance: checkSmsButtonExists failed - ${error}`);

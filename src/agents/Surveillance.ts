@@ -84,18 +84,17 @@ export class SurveillanceAgent extends EventEmitter {
     this.screenshotSender = sender;
   }
 
-  /** Drops images, fonts, media and trackers. The table is HTML/XHR; this is the bulk of NAT egress. */
+  /** Trackers only. Images and fonts stay: blocking them made the login phone field unclickable. */
   private async blockHeavyResources(): Promise<void> {
     await this.context!.route('**/*', (route) => {
       const request = route.request();
-      const type = request.resourceType();
-      if (type === 'image' || type === 'media' || type === 'font') return route.abort();
+      if (request.resourceType() === 'media') return route.abort();
       if (/google-analytics|googletagmanager|mc\.yandex|metrika|facebook\.net|hotjar|doubleclick|sentry\.io/i.test(request.url())) {
         return route.abort();
       }
       return route.continue();
     });
-    this.logger.info('Surveillance: images, fonts, media and trackers blocked');
+    this.logger.info('Surveillance: trackers and media blocked');
   }
 
   private async notifyScreenshot(reason: ScreenshotReason, scope = 'bank_login'): Promise<void> {

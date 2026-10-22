@@ -8,6 +8,7 @@ import { getBccCode } from '../utils/InstallmentMapper';
 import { EventEmitter } from 'events';
 import { RegistryAgent } from './Registry';
 import { ScreenshotEpisodes, ScreenshotReason } from '../utils/routineScreenshots';
+import { afterCredentialsSubmitted } from '../utils/postLogin';
 
 const SMS_CODE_DIALOG = 'div[data-pw="input-code-container"]';
 const SMS_BLOCKED_MARKERS = ['несколько раз ввели неверно', 'заблокир'];
@@ -33,6 +34,8 @@ export class SurveillanceAgent extends EventEmitter {
   private readonly HARD_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
   private isBrowserInitialized: boolean = false;
   private isWaitingForSms: boolean = false;
+  /** Set while recoverAccessDenied is running, so a second hit throws instead of looping. */
+  private accessDeniedRecovering = false;
   private smsCodePromise: Promise<string> | null = null;
   private resolveSmsCode: ((code: string) => void) | null = null;
   private registry: RegistryAgent | null = null;
@@ -278,30 +281,7 @@ export class SurveillanceAgent extends EventEmitter {
       }
 
       if (pageState === 'ACCESS_DENIED') {
-        this.logger.warn('Surveillance: Access denied — cashier not verified, reloading...');
-        await this.takeDebugScreenshot('access_denied');
-        // Attempt 1: hard reload
-        await this.page!.reload({ waitUntil: 'domcontentloaded', timeout: 60000 });
-        await this.page!.waitForTimeout(5000);
-        const retryState = await this.detectPageState();
-        if (retryState !== 'ACCESS_DENIED') {
-          // Page recovered, continue with normal flow
-          if (retryState === 'LOGGED_IN') { await this.saveSession(sessionPath); return; }
-          if (retryState === 'LOGIN_FORM') { await this.performLogin(sessionPath); return; }
-        }
-        // Attempt 2: reload again
-        this.logger.warn('Surveillance: Still ACCESS_DENIED after reload, retrying...');
-        await this.page!.reload({ waitUntil: 'domcontentloaded', timeout: 60000 });
-        await this.page!.waitForTimeout(5000);
-        const retryState2 = await this.detectPageState();
-        if (retryState2 !== 'ACCESS_DENIED') {
-          if (retryState2 === 'LOGGED_IN') { await this.saveSession(sessionPath); return; }
-          if (retryState2 === 'LOGIN_FORM') { await this.performLogin(sessionPath); return; }
-        }
-        // Both attempts failed — reinitialize browser and re-login
-        this.logger.warn('Surveillance: ACCESS_DENIED persists after 2 reloads, reinitializing browser');
-        await this.restartBrowser();
-        await this.performLogin(sessionPath);
+        await this.recoverAccessDenied(sessionPath);
         return;
       }
 
@@ -440,6 +420,34 @@ export class SurveillanceAgent extends EventEmitter {
     }
   }
 
+  /**
+   * "Доступ ограничен" is a bank UI glitch. Reload twice, then restart Chrome and log in again.
+   * One round only: a second hit throws, and the scheduler retries the next cycle instead of exiting.
+   */
+  private async recoverAccessDenied(sessionPath: string): Promise<void> {
+    if (this.accessDeniedRecovering) {
+      throw new Error('ACCESS_DENIED persists after recovery');
+    }
+    this.accessDeniedRecovering = true;
+    try {
+      this.logger.warn('Surveillance: Access denied — cashier not verified, reloading...');
+      await this.takeDebugScreenshot('access_denied');
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        await this.page!.reload({ waitUntil: 'domcontentloaded', timeout: 60000 });
+        await this.page!.waitForTimeout(5000);
+        const retryState = await this.detectPageState();
+        if (retryState === 'LOGGED_IN') { await this.saveSession(sessionPath); return; }
+        if (retryState === 'LOGIN_FORM') { await this.performLogin(sessionPath); return; }
+        this.logger.warn(`Surveillance: Still ${retryState} after reload ${attempt}/2`);
+      }
+      this.logger.warn('Surveillance: ACCESS_DENIED persists after 2 reloads, reinitializing browser');
+      await this.restartBrowser();
+      await this.performLogin(sessionPath);
+    } finally {
+      this.accessDeniedRecovering = false;
+    }
+  }
+
   private async performLogin(sessionPath: string): Promise<void> {
     await this.fillPhoneField('input#username', this.bankLogin);
 
@@ -448,8 +456,21 @@ export class SurveillanceAgent extends EventEmitter {
 
     const smsCodeSent = await this.handleSmsVerification(sessionPath);
     if (!smsCodeSent) {
-      // Patience Mode: ждем таблицу до 60 секунд
-      await this.page!.waitForSelector('.bcc-table-body', { timeout: 60000 });
+      // The bank often paints "Доступ ограничен" here. Waiting blindly for the table
+      // burns 60s and the thrown timeout used to kill the process.
+      const deadline = Date.now() + 45000;
+      let state = await this.detectPageState();
+      while (afterCredentialsSubmitted(state) === 'keep_waiting' && Date.now() < deadline) {
+        await this.page!.waitForTimeout(1000);
+        state = await this.detectPageState();
+      }
+      if (afterCredentialsSubmitted(state) === 'recover_access_denied') {
+        await this.recoverAccessDenied(sessionPath);
+        return;
+      }
+      if (state !== 'LOGGED_IN') {
+        throw new Error('Login did not reach the cashier table');
+      }
     }
 
     await this.saveSession(sessionPath);

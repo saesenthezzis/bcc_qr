@@ -434,8 +434,9 @@ async function main(): Promise<void> {
     Logger.info('[STARTUP] ✅ All systems ready - CreditBridge RPA Engine is running!');
 
     let restartWindowStartedAt = Date.now();
-    try {
-      while (true) {
+    let lastFailureNotify = 0;
+    while (true) {
+      try {
         // Check if monitoring is paused
         if (isMonitoringPaused) {
           Logger.info('[CYCLE] Monitoring is paused, skipping cycle');
@@ -461,10 +462,17 @@ async function main(): Promise<void> {
           await surveillance.restartBrowser();
           restartWindowStartedAt = Date.now();
         }
+      } catch (error) {
+        // Exiting here made Render stop restarting after a login crash loop, and the bot stayed dead for hours.
+        Logger.error(`Cycle failed, retrying in 60s: ${error}`);
+        const now = Date.now();
+        if (now - lastFailureNotify > 15 * 60 * 1000) {
+          lastFailureNotify = now;
+          const screenshot = await surveillance.takeErrorScreenshot('critical_failure').catch(() => null);
+          await dispatcher.sendErrorMessage(error, screenshot).catch(() => {});
+        }
+        await new Promise(resolve => setTimeout(resolve, 60000));
       }
-    } catch (error) {
-      Logger.error(`Critical scheduler failure: ${error}`);
-      await handleCriticalFailure(error);
     }
   } catch (error) {
     Logger.error(`Fatal error: ${error}`);

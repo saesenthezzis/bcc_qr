@@ -31,7 +31,7 @@ export class SurveillanceAgent extends EventEmitter {
   private context: BrowserContext | null = null;
   private page: Page | null = null;
   private lastHardRefresh: number = 0;
-  private readonly HARD_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
+  private readonly HARD_REFRESH_INTERVAL_MS = 60 * 60 * 1000;
   private isBrowserInitialized: boolean = false;
   private isWaitingForSms: boolean = false;
   /** Set while recoverAccessDenied is running, so a second hit throws instead of looping. */
@@ -84,11 +84,25 @@ export class SurveillanceAgent extends EventEmitter {
     this.screenshotSender = sender;
   }
 
+  /** Drops images, fonts, media and trackers. The table is HTML/XHR; this is the bulk of NAT egress. */
+  private async blockHeavyResources(): Promise<void> {
+    await this.context!.route('**/*', (route) => {
+      const request = route.request();
+      const type = request.resourceType();
+      if (type === 'image' || type === 'media' || type === 'font') return route.abort();
+      if (/google-analytics|googletagmanager|mc\.yandex|metrika|facebook\.net|hotjar|doubleclick|sentry\.io/i.test(request.url())) {
+        return route.abort();
+      }
+      return route.continue();
+    });
+    this.logger.info('Surveillance: images, fonts, media and trackers blocked');
+  }
+
   private async notifyScreenshot(reason: ScreenshotReason, scope = 'bank_login'): Promise<void> {
     if (!this.page || !this.screenshotSender || !this.screenshotEpisodes) return;
     try {
       await this.screenshotEpisodes.attempt(reason, scope, async () => {
-        const buffer = await this.page!.screenshot({ type: 'png', fullPage: false,
+        const buffer = await this.page!.screenshot({ type: 'jpeg', quality: 30, fullPage: false,
           mask: [this.page!.locator('input[type="password"]')] });
         await this.screenshotSender!(reason, buffer);
       });
@@ -195,6 +209,7 @@ export class SurveillanceAgent extends EventEmitter {
       ignoreHTTPSErrors: true,
       viewport: { width: 1920, height: 1080 },
     });
+    await this.blockHeavyResources();
 
     this.page = await this.context.newPage();
     this.page.setDefaultTimeout(90000);
@@ -693,7 +708,7 @@ export class SurveillanceAgent extends EventEmitter {
   async hardRefreshIfNeeded(): Promise<void> {
     const now = Date.now();
     if (now - this.lastHardRefresh >= this.HARD_REFRESH_INTERVAL_MS) {
-      this.logger.info('Surveillance: Performing hard refresh (15 min interval)');
+      this.logger.info('Surveillance: Performing hard refresh (60 min interval)');
       await this.hardRefresh();
       this.lastHardRefresh = now;
     }

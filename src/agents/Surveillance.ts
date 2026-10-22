@@ -8,11 +8,11 @@ import { getBccCode } from '../utils/InstallmentMapper';
 import { EventEmitter } from 'events';
 import { RegistryAgent } from './Registry';
 import { ScreenshotEpisodes, ScreenshotReason } from '../utils/routineScreenshots';
-import { afterCredentialsSubmitted } from '../utils/postLogin';
+import { afterAccessDeniedReload, afterCredentialsSubmitted } from '../utils/postLogin';
 
 const SMS_CODE_DIALOG = 'div[data-pw="input-code-container"]';
 const SMS_BLOCKED_MARKERS = ['несколько раз ввели неверно', 'заблокир'];
-const ACCESS_DENIED_MARKERS = ['доступ ограничен', 'не верифицирован как кассир', 'кассир', 'not verified as cashier', 'access denied'];
+const ACCESS_DENIED_MARKERS = ['доступ ограничен', 'не верифицирован как кассир', 'not verified as cashier', 'access denied'];
 const CONFIRM_BUTTON_SELECTORS = [
   'div[role="dialog"] button:has-text("Подтвердить")',
   'div.bcc-modal_show button:has-text("Подтвердить")',
@@ -446,20 +446,38 @@ export class SurveillanceAgent extends EventEmitter {
     try {
       this.logger.warn('Surveillance: Access denied — cashier not verified, reloading...');
       await this.takeDebugScreenshot('access_denied');
-      for (let attempt = 1; attempt <= 2; attempt++) {
+      let state = await this.detectPageState();
+      for (let attempt = 1; attempt <= 2 && state === 'ACCESS_DENIED'; attempt++) {
         await this.page!.reload({ waitUntil: 'domcontentloaded', timeout: 60000 });
         await this.page!.waitForTimeout(5000);
-        const retryState = await this.detectPageState();
-        if (retryState === 'LOGGED_IN') { await this.saveSession(sessionPath); return; }
-        if (retryState === 'LOGIN_FORM') { await this.performLogin(sessionPath); return; }
-        this.logger.warn(`Surveillance: Still ${retryState} after reload ${attempt}/2`);
+        state = await this.detectPageState();
+        this.logger.warn(`Surveillance: After reload ${attempt}/2 page is ${state}`);
       }
+      if (await this.finishRecoveredPage(sessionPath, state)) return;
+
       this.logger.warn('Surveillance: ACCESS_DENIED persists after 2 reloads, reinitializing browser');
       await this.restartBrowser();
-      await this.performLogin(sessionPath);
+      // restartBrowser opens a blank tab. Clicking the phone field there waits 90s and never logs in.
+      await this.page!.goto('https://online.bcc.kz/cashier-cabinet', { waitUntil: 'domcontentloaded', timeout: 60000 });
+      await this.waitForPageReady();
+      state = await this.detectPageState();
+      if (await this.finishRecoveredPage(sessionPath, state)) return;
+      throw new Error(`Still ${state} after browser restart, login field was not clicked`);
     } finally {
       this.accessDeniedRecovering = false;
     }
+  }
+
+  /** Cabinet or a real login form. A loading page is waited out. A blank tab is not clicked. */
+  private async finishRecoveredPage(sessionPath: string, state: Awaited<ReturnType<SurveillanceAgent['detectPageState']>>): Promise<boolean> {
+    const action = afterAccessDeniedReload(state);
+    if (action === 'done') { await this.saveSession(sessionPath); return true; }
+    if (action === 'submit_login') { await this.performLogin(sessionPath); return true; }
+    if (action === 'wait_for_table') {
+      const rows = await this.page!.waitForSelector('.bcc-table-body__row', { timeout: 30000, state: 'visible' }).then(() => true).catch(() => false);
+      if (rows) { await this.saveSession(sessionPath); this.logger.info('Surveillance: Table appeared after access-denied reload'); return true; }
+    }
+    return false;
   }
 
   private async performLogin(sessionPath: string): Promise<void> {
@@ -652,7 +670,7 @@ export class SurveillanceAgent extends EventEmitter {
     if (!this.page) return;
 
     try {
-      await this.page.click(selector);
+      await this.page.click(selector, { timeout: 10000 });
       await this.page.waitForTimeout(200);
 
       await this.page.keyboard.press('Control+A');

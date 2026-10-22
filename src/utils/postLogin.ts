@@ -12,3 +12,13 @@ export function afterCredentialsSubmitted(state: CashierPage): AfterSubmit {
   if (state === 'ACCESS_DENIED') return 'recover_access_denied';
   return 'keep_waiting';
 }
+
+export type DeniedRecovery = 'done' | 'submit_login' | 'wait_for_table' | 'still_denied';
+
+/** After a reload of the "Доступ ограничен" glitch. A loading cabinet is not a login form. */
+export function afterAccessDeniedReload(state: CashierPage): DeniedRecovery {
+  if (state === 'LOGGED_IN') return 'done';
+  if (state === 'LOGIN_FORM') return 'submit_login';
+  if (state === 'ACCESS_DENIED') return 'still_denied';
+  return 'wait_for_table';
+}
